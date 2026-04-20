@@ -136,7 +136,7 @@ class ClinicalDataExtractor:
                 
         return df
 
-    def get_variable_data(self, variable_name: str, time_process_func, in_time, subject_id: Optional[int] = None, stay_id: Optional[int] = None) -> pd.DataFrame:
+    def get_variable_data(self, variable_name: str, time_process_func = None, in_time = None, subject_id: Optional[int] = None, stay_id: Optional[int] = None) -> pd.DataFrame:
         """
         Trích xuất dữ liệu cho một biến cụ thể.
         """
@@ -164,15 +164,16 @@ class ClinicalDataExtractor:
 
             if df.empty:
                 continue
-
-            time_col = row["charttime"]
-            if pd.notna(time_col) and time_col in df.columns:
-                # Đảm bảo cột thời gian trong df là datetime
-                df[time_col] = time_process_func(df[time_col])
-                
-                # Tính khoảng cách thời gian và lọc
-                # pd.Timedelta(hours=48) đại diện cho 48 giờ
-                df = df[(df[time_col] - in_time) >= pd.Timedelta(hours=48)]
+            
+            if time_process_func is not None:
+                time_col = row["time_column"]
+                if pd.notna(time_col) and time_col in df.columns:
+                    # Đảm bảo cột thời gian trong df là datetime
+                    df[time_col] = time_process_func(df[time_col])
+                    
+                    # Tính khoảng cách thời gian và lọc
+                    # pd.Timedelta(hours=48) đại diện cho 48 giờ
+                    df = df[(df[time_col] - in_time) >= pd.Timedelta(hours=48)]
 
             # Copy để gán meta-data mà không ảnh hưởng DataFrame gốc
             df_mapped = df.copy()
@@ -193,30 +194,3 @@ class ClinicalDataExtractor:
     
 
 
-if __name__ == '__main__':
-    # 1. Đọc dữ liệu từ DB hoặc CSV của bạn
-    df_chartevents = pd.read_csv(r"D:\AI4LIFE\Y_te\mimic-iv-3.1\icu\chartevents.csv", nrows=10000)
-    df_labevents = pd.read_csv(r"D:\AI4LIFE\Y_te\mimic-iv-3.1\hosp\labevents.csv", nrows=10000)
-    # ...
-
-    # 2. Gom chúng vào 1 dictionary
-    mimic_data = {
-        "chartevents": df_chartevents,
-        "labevents": df_labevents,
-        # "discharge": df_discharge,
-        # "microbiology": df_micro,
-        # "procedureevents": df_procedure,
-        # "radiology": df_radiology
-    }
-
-    # 3. Khởi tạo Extractor
-    extractor = ClinicalDataExtractor(data_tables=mimic_data)
-
-    # 4. Sử dụng
-    nhiet_do_data = extractor.get_variable_data(
-        variable_name="Cấy máu", 
-        subject_id=10001217,
-        stay_id=34592300
-    )
-
-    print(nhiet_do_data)
