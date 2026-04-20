@@ -2,12 +2,37 @@ import pandas as pd
 import numpy as np
 from features_mapping import ClinicalDataExtractor
 
-def _to_datetime_safe(s):
-    return pd.to_datetime(s, errors="coerce")
+def process_time_without_year(date_series):
+    """
+    Converts an object/string series to datetime and neutralizes the year.
+    This allows you to calculate time differences (months, days, hours, mins) 
+    while completely ignoring the original year.
+    
+    Parameters:
+    date_series (pd.Series or list): The input dates as strings/objects.
+    
+    Returns:
+    pd.Series: Datetime objects with the year standardized to 2000.
+    """
+    # 1. Convert the object to a proper datetime type
+    dt_series = pd.to_datetime(date_series, errors='coerce')
+    
+    # 2. "Remove" the year by setting every year to 2000
+    # The lambda function checks if the value is not null before replacing
+    dt_no_year = dt_series.apply(lambda x: x.replace(year=2000) if pd.notnull(x) else x)
+    
+    return dt_no_year
 
-def _contains_any(series, keywords):
-    pattern = "|".join(keywords)
-    return series.astype(str).str.contains(pattern, case=False, na=False, regex=True)
+def is_time_between(charttime, intime, outtime):
+    """
+    Kiểm tra xem một mốc thời gian có nằm giữa intime và outtime không.
+    Trả về True nếu: intime <= check_time <= outtime
+    """
+    t_check = process_time_without_year(charttime)
+    t_in = process_time_without_year(intime)
+    t_out = process_time_without_year(outtime)
+    
+    return (t_check >= t_in) & (t_check <= t_out)
 
 class InfectionChecker:
     """Class quản lý việc kiểm tra các loại nhiễm trùng (HAIs) của bệnh nhân."""
@@ -22,7 +47,10 @@ class InfectionChecker:
         pass
 
     def check_clabsi_subject(self, subject_id: int, stay_id: int):
-        in_time = self.icu_stay[self.icu_stay['stay_id'] == stay_id]
+        stay_info = self.icu_stay[self.icu_stay['stay_id'] == stay_id]
+        in_time = stay_info['intime']
+        out_time = stay_info['outtime']
+
         nhiet_do = self.extractor.get_variable_data(
             variable_name="Nhiệt độ", 
             subject_id=subject_id,
@@ -52,6 +80,8 @@ class InfectionChecker:
             subject_id=subject_id,
             stay_id = stay_id
         )
+
+
 
     def check_cauti_subject(self, subject_id: int, stay_id: int):
         nhiet_do = self.extractor.get_variable_data(
