@@ -51,11 +51,29 @@ class InfectionChecker:
         in_time = stay_info['intime']
         out_time = stay_info['outtime']
 
+        # Cấy máu dương tính với tác nhân gây bệnh
+        cay_mau = self.extractor.get_variable_data(
+            variable_name="Cấy máu", 
+            subject_id=subject_id,
+            stay_id = stay_id
+        )
+        
+
+
+        # Sot
+        sot = False
         nhiet_do = self.extractor.get_variable_data(
             variable_name="Nhiệt độ", 
             subject_id=subject_id,
             stay_id = stay_id
         )
+
+        for temp in nhietdo.itertuples(index=True, name='Pandas'):
+            if (temp.itemid == 223761 and temp.valuenum > 100.4) or (temp.itemid == 223762 and temp.valuenum > 38):
+                sot = True
+                break
+                
+
 
         on_lanh = self.extractor.get_variable_data(
             variable_name="Ớn lạnh", 
@@ -75,11 +93,8 @@ class InfectionChecker:
             stay_id = stay_id
         )
 
-        carthter = self.extractor.get_variable_data(
-            variable_name="Thời gian đặt catheter TMTT", 
-            subject_id=subject_id,
-            stay_id = stay_id
-        )
+
+
 
 
 

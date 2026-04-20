@@ -136,7 +136,7 @@ class ClinicalDataExtractor:
                 
         return df
 
-    def get_variable_data(self, variable_name: str, subject_id: Optional[int] = None, stay_id: Optional[int] = None) -> pd.DataFrame:
+    def get_variable_data(self, variable_name: str, time_process_func, in_time, subject_id: Optional[int] = None, stay_id: Optional[int] = None) -> pd.DataFrame:
         """
         Trích xuất dữ liệu cho một biến cụ thể.
         """
@@ -164,6 +164,15 @@ class ClinicalDataExtractor:
 
             if df.empty:
                 continue
+
+            time_col = row["charttime"]
+            if pd.notna(time_col) and time_col in df.columns:
+                # Đảm bảo cột thời gian trong df là datetime
+                df[time_col] = time_process_func(df[time_col])
+                
+                # Tính khoảng cách thời gian và lọc
+                # pd.Timedelta(hours=48) đại diện cho 48 giờ
+                df = df[(df[time_col] - in_time) >= pd.Timedelta(hours=48)]
 
             # Copy để gán meta-data mà không ảnh hưởng DataFrame gốc
             df_mapped = df.copy()
