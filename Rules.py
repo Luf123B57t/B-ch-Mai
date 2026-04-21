@@ -316,7 +316,23 @@ class InfectionChecker:
                 munieu = True
                 first_time1 = min(first_time1, sample.charttime)
 
-        trieuchung2 = bachcaunieu or munieu or cay_nuoc_tieu_duong_tinh
+        # Nitrat nieu
+        positive_values = ['POS', 'POSITIVE', 'P']
+        nitratnieu = False
+        nitrat_nieu = self.extractor.get_variable_data(
+            variable_name="Nitrat niệu", 
+            subject_id=subject_id,
+            in_time= in_time, 
+            out_time= out_time,
+            time_process_func= process_time_without_year
+        )
+        for sample in nitrat_nieu.itertuples():
+            val_str = str(sample.value).strip().upper()
+            if val_str in positive_values:
+                nitratnieu = True
+                first_time1 = min(first_time1, sample.charttime)
+
+        trieuchung2 = bachcaunieu or munieu or cay_nuoc_tieu_duong_tinh or nitratnieu
         if not trieuchung2:
             return False
         
