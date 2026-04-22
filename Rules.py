@@ -26,19 +26,17 @@ def process_time_without_year(date_series):
 class InfectionChecker:
     """Class quản lý việc kiểm tra các loại nhiễm trùng (HAIs) của bệnh nhân."""
     
-    def __init__(self, icu_stays, extractor: ClinicalDataExtractor, verbose: bool = True):
+    def __init__(self,extractor: ClinicalDataExtractor, verbose: bool = True):
         self.extractor = extractor
         self.verbose = verbose
-        self.icu_stay = icu_stays
 
     def check_vap(self, subject_id: int, stay_id: int):
         # Sử dụng self.extractor ở đây
         pass
 
-    def check_clabsi_subject(self, subject_id: int, stay_id: int):
-        stay_info = self.icu_stay[self.icu_stay['stay_id'] == stay_id]
-        in_time = process_time_without_year(stay_info['intime']).iloc[0]
-        out_time = process_time_without_year(stay_info['outtime']).iloc[0]
+    def check_clabsi_subject(self, subject_id: int, stay_id: int, intime: object, outtime: object):
+        in_time = process_time_without_year(intime)
+        out_time = process_time_without_year(outtime)
 
         FAR_FUTURE = pd.Timestamp('2001-01-01')
         first_time1 = FAR_FUTURE
@@ -170,10 +168,9 @@ class InfectionChecker:
         return trieu_chung and thoi_gian_dat_catheter and cay_mau_duong_tinh_hop_le
 
 
-    def check_cauti_subject(self, subject_id: int, stay_id: int):
-        stay_info = self.icu_stay[self.icu_stay['stay_id'] == stay_id]
-        in_time = process_time_without_year(stay_info['intime']).iloc[0]
-        out_time = process_time_without_year(stay_info['outtime']).iloc[0]
+    def check_cauti_subject(self, subject_id: int, stay_id: int, intime: object, outtime: object):
+        in_time = process_time_without_year(intime)
+        out_time = process_time_without_year(outtime)
 
         FAR_FUTURE = pd.Timestamp('2001-01-01')
         first_time1 = FAR_FUTURE
