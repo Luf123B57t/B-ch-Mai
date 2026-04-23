@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 from features_mapping import ClinicalDataExtractor
+import torch
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 def process_time_without_year(date_series):
     """
@@ -33,6 +36,11 @@ class InfectionChecker:
     def __init__(self,extractor: ClinicalDataExtractor, verbose: bool = True):
         self.extractor = extractor
         self.verbose = verbose
+        MODEL_DIR = "./Bert"
+        
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+        self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR).to(self.device)
 
     def _check_spo2_worsening(self, subject_id, stay_id, in_time:pd.Timestamp):
         """
@@ -240,13 +248,11 @@ class InfectionChecker:
             out_time=out_time
         )
 
-        pneumonia_keywords = [
-            "pneumonia", "pna", "bronchopneumonia", "consolidation",
-            "infiltrate", "infiltration", "opacity", "opacities",
-            "ground glass", "ggo", "air bronchogram", "patchy",
-            "cloudy", "hazy"
-        ]
+        THRESHOLD = 0.35 
+        MAX_LENGTH = 256
 
+        text_list = []
+        
         for df_img in [xray, ct]:
             if df_img.empty:
                 continue
@@ -256,14 +262,40 @@ class InfectionChecker:
 
             for sample in df_img.itertuples(index=True, name="Pandas"):
                 text = str(sample.text).lower()
-                if any(k in text for k in pneumonia_keywords):
-                    imaging_positive = True
-                    break
+                text_list.append(text)
 
-            if imaging_positive:
-                break
+        
+        self.model.eval()
+
+        def predict_batch(texts, batch_size=4):
+            probs_all = []
+
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i+batch_size]
+                inputs = self.tokenizer(
+                    batch_texts,
+                    truncation=True,
+                    padding=True,
+                    max_length=MAX_LENGTH,
+                    return_tensors="pt"
+                ).to(self.device)
+
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    probs = torch.softmax(outputs.logits, dim=1)[:, 1].cpu().numpy()
+
+                probs_all.extend(probs)
+
+            return np.array(probs_all)
+
+        probs = predict_batch(text_list)
+        preds = (probs >= THRESHOLD).astype(int)
+
+        if len(preds) > 0 and preds.max() == 1: # Có ít nhất 1 dự đoán là 1
+            imaging_positive = True
 
         return imaging_positive
+
 
     def _get_vap_micro_positive(self, subject_id: int, in_time:pd.Timestamp):
         """
