@@ -104,8 +104,8 @@ class ClinicalDataExtractor:
 
             # ===== RADIOLOGY =====
             # hadm_id_column set thành None vì trong code gốc bạn ghi rõ "hadm_id_column": None
-            MappingRule("X-quang ngực", "radiology", lookup_column="field_name", lookup_value="FINDINGS", value_column="field_value", note_id_column="note_id", hadm_id_column=None),
-            MappingRule("CT scan lồng ngực", "radiology", lookup_column="field_name", lookup_value="FINDINGS", value_column="field_value", note_id_column="note_id", hadm_id_column=None),
+            MappingRule("X-quang ngực","radiology",lookup_column="note_type",lookup_value="Radiology",value_column="text",time_column="charttime",note_id_column="note_id"),
+            MappingRule("CT scan lồng ngực","radiology",lookup_column="note_type",lookup_value="Radiology",value_column="text",time_column="charttime",note_id_column="note_id"),
         ]
         
         # Chuyển đổi thành DataFrame và loại bỏ trùng lặp

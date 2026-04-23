@@ -29,6 +29,8 @@ results = {
     "CAUTI": {"positive": 0, "negative": 0}
 }
 
+detailed_results = []
+
 for row in icu_stay.itertuples():
     subject_id = row.subject_id
     intime = process_time_without_year(row.intime)
@@ -54,10 +56,36 @@ for row in icu_stay.itertuples():
         results["CAUTI"]["positive"] += 1
     else:
         results["CAUTI"]["negative"] += 1
+
     print()
+
+    detailed_results.append({
+        "subject_id": subject_id,
+        "stay_id": stay_id,
+        "rule1_vap": vap_check['rule1'],
+        "rule2_vap": vap_check['rule2'],
+        "rule3_vap": vap_check['rule3'],
+        "final_vap": vap_check['final_vap'],
+        "rule1_clabsi": clabsi_check['rule1'],
+        "rule2_clabsi": clabsi_check['rule2'],
+        "final_clabsi": clabsi_check['final_clabsi'],
+        "rule1_cauti": cauti_check['rule1'],
+        "rule2_cauti": cauti_check['rule2'],
+        "final_cauti": cauti_check['final_cauti']
+    })
 
 
 print("\n--- KẾT QUẢ THỐNG KÊ ---")
 for infection_type, stats in results.items():
     print(f"{infection_type}: {stats['positive']} Ca Mắc | {stats['negative']} Ca Không")
+
+print("\nĐang lưu kết quả chi tiết ra file CSV...")
+# Chuyển list các dictionary thành DataFrame
+df_results = pd.DataFrame(detailed_results)
+
+# Xuất ra file CSV (bạn có thể đổi tên file và đường dẫn tùy ý)
+csv_filename = "infection_check_detailed_results.csv"
+df_results.to_csv(csv_filename, index=False, encoding='utf-8')
+
+print(f"Đã lưu thành công dữ liệu chi tiết vào file: {csv_filename}")
     
