@@ -197,5 +197,3 @@ class ClinicalDataExtractor:
         final_result = pd.concat(results, ignore_index=True, sort=False)
         return final_result.drop_duplicates().reset_index(drop=True)
     
-
-
