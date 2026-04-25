@@ -36,11 +36,46 @@ class InfectionChecker:
     def __init__(self,extractor: ClinicalDataExtractor, verbose: bool = True):
         self.extractor = extractor
         self.verbose = verbose
-        MODEL_DIR = "./Bert"
+        MODEL_DIR = "/home/user04/Yte_BachMai/model_bert/clinicalbert_best"
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
         self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR).to(self.device)
+
+        self._data_cache = {}
+
+    def clear_cache(self):
+        self._data_cache = {}
+
+    def _get_cached_data(self, variable_name, subject_id, stay_id=None, in_time=None, out_time=None, check_48h=None):
+        """
+        Hàm Wrapper để lấy dữ liệu. Tự động lưu cache để dùng lại nếu gọi trùng tham số.
+        """
+        if subject_id is None or in_time is None:
+            raise ValueError(f"Lỗi [{variable_name}]: Bắt buộc phải truyền subject_id và in_time.")
+        
+        if stay_id is None and out_time is None:
+            raise ValueError(f"Lỗi [{variable_name}]: Nếu không có stay_id thì bắt buộc phải truyền out_time.")
+        
+        # Tạo một tuple khóa (key) đại diện cho lời gọi này
+        cache_key = (variable_name, subject_id, stay_id, in_time, out_time, check_48h)
+        
+        if cache_key not in self._data_cache:
+            # Tạo dictionary các tham số hợp lệ để truyền vào extractor
+            kwargs = {
+                'variable_name': variable_name,
+                'subject_id': subject_id,
+                'time_process_func': process_time_without_year
+            }
+            if stay_id is not None: kwargs['stay_id'] = stay_id
+            if in_time is not None: kwargs['in_time'] = in_time
+            if out_time is not None: kwargs['out_time'] = out_time
+            if check_48h is not None: kwargs['check_48h'] = check_48h
+
+            self._data_cache[cache_key] = self.extractor.get_variable_data(**kwargs)
+            
+        # Luôn trả về copy() để các hàm xử lý xóa/sửa cột không làm hỏng cache
+        return self._data_cache[cache_key].copy()
 
     def _check_spo2_worsening(self, subject_id, stay_id, in_time:pd.Timestamp):
         """
@@ -54,13 +89,13 @@ class InfectionChecker:
         - first_spo2_time: thời điểm đầu tiên thỏa tiêu chí
         - spo2_df: bảng debug
         """
-        spo2 = self.extractor.get_variable_data(
+
+        spo2 = self._get_cached_data(
             variable_name="SpO2",
             subject_id=subject_id,
             stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        ).copy()
+            in_time=in_time
+        )
 
         if spo2.empty:
             return False, None, pd.DataFrame()
@@ -107,26 +142,18 @@ class InfectionChecker:
         spo2_flag = False
 
         # -------- Sốt --------
-        nhiet_do = self.extractor.get_variable_data(
-            variable_name="Nhiệt độ",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        )
-        for temp in nhiet_do.itertuples(index=True, name="Pandas"):
-            if (temp.itemid == 223761 and temp.valuenum > 100.4) or (temp.itemid == 223762 and temp.valuenum > 38):
+        sot = False
+        nhiet_do = self._get_cached_data("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        if not nhiet_do.empty:
+            mask = ((nhiet_do['itemid'] == 223761) & (nhiet_do['valuenum'] > 100.4)) | \
+                   ((nhiet_do['itemid'] == 223762) & (nhiet_do['valuenum'] > 38))
+            df_sot = nhiet_do[mask]
+            if not df_sot.empty:
                 sot = True
-                first_time = min(first_time, temp.charttime)
+                first_time = min(first_time, df_sot['charttime'].min())
 
         # -------- Ho --------
-        ho = self.extractor.get_variable_data(
-            variable_name="Ho",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        )
+        ho = self._get_cached_data("Ho", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in ho.itertuples(index=True, name="Pandas"):
             val = str(sample.value).strip().lower()
             if sample.itemid == 223991 and val in ["weak", "strong"]:
@@ -134,13 +161,7 @@ class InfectionChecker:
                 first_time = min(first_time, sample.charttime)
 
         # -------- Đờm mủ --------
-        dom_mu = self.extractor.get_variable_data(
-            variable_name="Đờm mủ",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        )
+        dom_mu = self._get_cached_data("Đờm mủ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in dom_mu.itertuples(index=True, name="Pandas"):
             val = str(sample.value).strip().lower()
             if val != "clear":
@@ -148,13 +169,7 @@ class InfectionChecker:
                 first_time = min(first_time, sample.charttime)
 
         # -------- Thở nhanh --------
-        nhip_tho = self.extractor.get_variable_data(
-            variable_name="Nhịp thở",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        )
+        nhip_tho = self._get_cached_data("Nhịp thở", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in nhip_tho.itertuples(index=True, name="Pandas"):
             if pd.notna(sample.valuenum) and sample.valuenum > 20:
                 tho_nhanh_flag = True
@@ -178,26 +193,14 @@ class InfectionChecker:
             "rhonchi", "tubular"
         }
 
-        rale = self.extractor.get_variable_data(
-            variable_name="Rale",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        )
+        rale = self._get_cached_data("Rale", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in rale.itertuples(index=True, name="Pandas"):
             val = str(sample.value).strip().lower()
             if val in lung_keywords:
                 lung_sound_flag = True
                 first_time = min(first_time, sample.charttime)
 
-        bronchial = self.extractor.get_variable_data(
-            variable_name="Tiếng thở phế quản",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        )
+        bronchial = self._get_cached_data("Tiếng thở phế quản", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in bronchial.itertuples(index=True, name="Pandas"):
             val = str(sample.value).strip().lower()
             if val == "bronchial":
@@ -241,23 +244,8 @@ class InfectionChecker:
 
         imaging_positive = False
 
-        xray = self.extractor.get_variable_data(
-            variable_name="X-quang ngực",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year,
-            out_time=out_time
-        )
-
-        ct = self.extractor.get_variable_data(
-            variable_name="CT scan lồng ngực",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year,
-            out_time=out_time
-        )
+        xray = self._get_cached_data("X-quang ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        ct = self._get_cached_data("CT scan lồng ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
 
         THRESHOLD = 0.35
         MAX_LENGTH = 256
@@ -280,7 +268,7 @@ class InfectionChecker:
 
         self.model.eval()
 
-        def predict_batch(texts, batch_size=4):
+        def predict_batch(texts, batch_size=8):
             probs_all = []
 
             for i in range(0, len(texts), batch_size):
@@ -319,26 +307,14 @@ class InfectionChecker:
         """
         micro_positive = False
 
-        cay_dich = self.extractor.get_variable_data(
-            variable_name="Cấy dịch đường hô hấp",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        )
+        cay_dich = self._get_cached_data("Cấy dịch đường hô hấp", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in cay_dich.itertuples(index=True, name="Pandas"):
             if pd.notna(sample.org_name):
                 micro_positive = True
                 break
 
         if not micro_positive:
-            cay_mau = self.extractor.get_variable_data(
-                variable_name="Cấy máu",
-                subject_id=subject_id,
-                stay_id=stay_id,
-                in_time=in_time,
-                time_process_func=process_time_without_year
-            )
+            cay_mau = self._get_cached_data("Cấy máu", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
             for sample in cay_mau.itertuples(index=True, name="Pandas"):
                 if pd.notna(sample.org_name):
                     micro_positive = True
@@ -353,15 +329,7 @@ class InfectionChecker:
         if first_time is None:
             return False
 
-        tho_may = self.extractor.get_variable_data(
-            variable_name="Thời gian thở máy",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year,
-            check_48h=False
-        )
-
+        tho_may = self._get_cached_data("Thời gian thở máy", subject_id=subject_id, stay_id=stay_id, in_time=in_time, check_48h=False)
         for sample in tho_may.itertuples(index=True, name="Pandas"):
             if pd.notna(sample.starttime):
                 if first_time - sample.starttime >= pd.Timedelta(days=2):
@@ -525,36 +493,22 @@ class InfectionChecker:
             'PROPIONIBACTERIUM ACNES',
             'BACILLUS SPECIES',
             'MICROCOCCUS SPECIES',
-            'VIRIDANS GROUP STREPTOCOCCI'
+            # 'VIRIDANS GROUP STREPTOCOCCI'
         ]
 
         # =========== RULE 1 ===========
 
         # Cấy máu dương tính với tác nhân gây bệnh
         cay_mau_duong_tinh = False
-        cay_mau = self.extractor.get_variable_data(
-            variable_name="Cấy máu", 
-            subject_id=subject_id,
-            stay_id = stay_id,
-            in_time= in_time,
-            time_process_func= process_time_without_year
-        )
+        cay_mau = self._get_cached_data("Cấy máu", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in cay_mau.itertuples(index=True, name='Pandas'):
-
             if sample.spec_type_desc == "BLOOD CULTURE" and pd.notna(sample.org_name) and sample.org_name.upper() not in skin_contaminants:
                 cay_mau_duong_tinh = True
                 first_time1 = min(first_time1, sample.charttime)
         
         # Thời gian đặt catheter TMTT
         thoi_gian_dat_catheter = False
-        catheter = self.extractor.get_variable_data(
-            variable_name="Thời gian đặt catheter TMTT",
-            subject_id = subject_id,
-            time_process_func=process_time_without_year,
-            in_time=in_time, 
-            out_time=out_time,
-            check_48h = False
-        )
+        catheter = self._get_cached_data("Thời gian đặt catheter TMTT", subject_id=subject_id, out_time=out_time, in_time=in_time, check_48h=False)
         for sample in catheter.itertuples(index=True, name='Pandas'):
             if first_time1 != FAR_FUTURE and first_time1 - sample.starttime >= pd.Timedelta(days=2):
                 thoi_gian_dat_catheter = True
@@ -566,76 +520,38 @@ class InfectionChecker:
 
         # Sot
         sot = False
-        nhiet_do = self.extractor.get_variable_data(
-            variable_name="Nhiệt độ", 
-            subject_id=subject_id,
-            stay_id = stay_id,
-            in_time= in_time,
-            time_process_func= process_time_without_year
-        )
-        for temp in nhiet_do.itertuples(index=True, name='Pandas'):
-            if (temp.itemid == 223761 and temp.valuenum > 100.4) or (temp.itemid == 223762 and temp.valuenum > 38):
-                first_time2 = min(first_time2, temp.charttime)
+        nhiet_do = self._get_cached_data("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        if not nhiet_do.empty:
+            mask = ((nhiet_do['itemid'] == 223761) & (nhiet_do['valuenum'] > 100.4)) | \
+                   ((nhiet_do['itemid'] == 223762) & (nhiet_do['valuenum'] > 38))
+            df_sot = nhiet_do[mask]
+            if not df_sot.empty:
                 sot = True
+                first_time2 = min(first_time2, df_sot['charttime'].min())
                 
         # On lanh
         onlanh = False
-        on_lanh = self.extractor.get_variable_data(
-            variable_name="Ớn lạnh", 
-            subject_id=subject_id,
-            in_time= in_time,
-            time_process_func= process_time_without_year,
-            out_time=out_time
-        )
-        for sample in on_lanh.itertuples(index=True, name='Pandas'):
-            first_time2 = min(first_time2, sample.charttime)
+        on_lanh = self._get_cached_data("Ớn lạnh", subject_id=subject_id, out_time=out_time, in_time=in_time)
+        if not on_lanh.empty:
             onlanh = True
+            min_charttime = on_lanh['charttime'].min()
+            first_time2 = min(first_time2, min_charttime)
         
         # Huyết áp thấp
         huyet_ap_thap = False
-        huyet_ap = self.extractor.get_variable_data(
-            variable_name="Huyết áp", 
-            subject_id=subject_id,
-            stay_id = stay_id,
-            in_time= in_time,
-            time_process_func= process_time_without_year
-        )
-        for blood_pres in huyet_ap.itertuples(index=True, name = 'Pandas'):
-            if blood_pres.valuenum <= 90:
+        huyet_ap = self._get_cached_data("Huyết áp tâm thu", subject_id=subject_id, stay_id = stay_id, in_time=in_time)
+        if not huyet_ap.empty and 'valuenum' in huyet_ap.columns:
+            df_huyet_ap_thap = huyet_ap[huyet_ap['valuenum'] <= 90]
+
+            if not df_huyet_ap_thap.empty:
                 huyet_ap_thap = True
-                first_time2 = min(first_time2, blood_pres.charttime)
+                min_bp_time = df_huyet_ap_thap['charttime'].min()
+                first_time2 = min(first_time2, min_bp_time)
         
         trieu_chung = sot or onlanh or huyet_ap_thap
 
-        
-        # df_skin = cay_mau[
-        #     (cay_mau['spec_type_desc'] == "BLOOD CULTURE") & 
-        #     (cay_mau['org_name'].str.upper().isin(skin_contaminants))
-        # ].copy()
-
-        # df_skin = df_skin.sort_values(by=['org_name', 'charttime'])
-
-        # cay_mau_duong_tinh_hop_le = False
-        # records = list(df_skin.itertuples(index=True, name='Pandas'))
-
-        # for i in range(len(records)):
-        #     for j in range(i + 1, len(records)):
-        #         sample_i = records[i]
-        #         sample_j = records[j]
-                
-        #         # Nếu cùng loại vi khuẩn
-        #         if sample_i.org_name == sample_j.org_name:
-        #             time_diff = sample_j.charttime - sample_i.charttime
-                    
-        #             if pd.Timedelta(0) < time_diff <= pd.Timedelta(hours=48):
-        #                 cay_mau_duong_tinh_hop_le = True
-        #                 first_time2 = min(first_time2, sample_i.charttime)
-        #                 break
-        #     if cay_mau_duong_tinh_hop_le:
-        #         break
+        # Hai mau cay duong tinh
         cay_mau_duong_tinh_hop_le = False
-        
-        # Kiểm tra an toàn: Đảm bảo df không rỗng VÀ chứa đầy đủ các cột cần thiết
         required_cols = ['spec_type_desc', 'org_name', 'charttime']
         if not cay_mau.empty and all(col in cay_mau.columns for col in required_cols):
             df_skin = cay_mau[
@@ -656,7 +572,7 @@ class InfectionChecker:
                     if sample_i.org_name == sample_j.org_name:
                         time_diff = sample_j.charttime - sample_i.charttime
                         
-                        if pd.Timedelta(0) < time_diff <= pd.Timedelta(hours=48):
+                        if pd.Timedelta(0) <= time_diff <= pd.Timedelta(hours=48):
                             cay_mau_duong_tinh_hop_le = True
                             first_time2 = min(first_time2, sample_i.charttime)
                             break
@@ -686,312 +602,171 @@ class InfectionChecker:
             "final_clabsi": final_clabsi
         }
 
-    # def check_cauti_subject(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
-    #     FAR_FUTURE = pd.Timestamp('2001-01-01')
-    #     first_time1 = FAR_FUTURE
-
-    #     # =========== RULE 2 ===========
-
-    #     # Sot
-    #     sot = False
-    #     nhiet_do = self.extractor.get_variable_data(
-    #         variable_name="Nhiệt độ", 
-    #         subject_id=subject_id,
-    #         stay_id = stay_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year
-    #     )
-    #     for temp in nhiet_do.itertuples(index=True, name='Pandas'):
-    #         if (temp.itemid == 223761 and temp.valuenum > 100.4) or (temp.itemid == 223762 and temp.valuenum > 38):
-    #             first_time1 = min(first_time1, temp.charttime)
-    #             sot = True
-
-    #     # Tieu gap
-    #     tieugap = False
-    #     tieu_gap = self.extractor.get_variable_data(
-    #         variable_name="Tiểu gấp", 
-    #         subject_id=subject_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year,
-    #         out_time = out_time
-    #     )
-    #     for sample in tieu_gap.itertuples(index=True, name='Pandas'):
-    #             first_time1 = min(first_time1, sample.charttime)
-    #             tieugap = True
-
-    #     # Tieu nhieu
-    #     tieunhieu = False
-    #     tieu_nhieu = self.extractor.get_variable_data(
-    #         variable_name="Tiểu nhiều lần", 
-    #         subject_id=subject_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year,
-    #         out_time = out_time
-    #     )
-    #     for sample in tieu_nhieu.itertuples(index=True, name='Pandas'):
-    #             first_time1 = min(first_time1, sample.charttime)
-    #             tieunhieu = True
-        
-    #     # Tieu buot
-    #     tieubuot = False
-    #     tieu_buot = self.extractor.get_variable_data(
-    #         variable_name="Tiểu buốt", 
-    #         subject_id=subject_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year,
-    #         out_time = out_time
-    #     )
-    #     for sample in tieu_buot.itertuples(index=True, name='Pandas'):
-    #             first_time1 = min(first_time1, sample.charttime)
-    #             tieubuot = True
-        
-    #     # Dau hong suon
-    #     dauhongsuon = False
-    #     dau_hong_suon = self.extractor.get_variable_data(
-    #         variable_name="Đau hông sườn", 
-    #         subject_id=subject_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year,
-    #         out_time = out_time
-    #     )
-    #     for sample in dau_hong_suon.itertuples(index=True, name='Pandas'):
-    #             first_time1 = min(first_time1, sample.charttime)
-    #             dauhongsuon = True
-
-    #     # Dau xuong mu
-    #     dauxuongmu = False
-    #     dau_xuong_mu = self.extractor.get_variable_data(
-    #         variable_name="Đau/ấn đau vùng trên xương mu", 
-    #         subject_id=subject_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year,
-    #         out_time = out_time
-    #     )
-    #     for sample in dau_xuong_mu.itertuples(index=True, name='Pandas'):
-    #             first_time1 = min(first_time1, sample.charttime)
-    #             dauxuongmu = True
-
-    #     trieuchung1 = False
-    #     if (sot + tieugap + tieubuot + tieunhieu + dauhongsuon + dauxuongmu) >= 2:
-    #         trieuchung1 = True
-    #     # Trieu chung 2
     
-    #     # Cay nuoc tieu
-    #     cay_nuoc_tieu_duong_tinh = False
-    #     cay_nuoc_tieu = self.extractor.get_variable_data(
-    #         variable_name="Cấy nước tiểu", 
-    #         subject_id=subject_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year,
-    #         out_time = out_time
-    #     )
-    #     if not cay_nuoc_tieu.empty and 'charttime' in cay_nuoc_tieu.columns:
-    #         cay_nuoc_tieu = cay_nuoc_tieu.sort_values('charttime', ascending=True)
-            
-    #         loai_vi_sinh_vat = set()
-    #         for sample in cay_nuoc_tieu.itertuples():
-    #             if pd.notna(sample.org_name):
-    #                 if sample.org_name in loai_vi_sinh_vat:
-    #                     cay_nuoc_tieu_duong_tinh = True
-    #                     first_time1 = min(first_time1, sample.charttime)
-    #                 else:
-    #                     loai_vi_sinh_vat.add(sample.org_name)
-            
-
-    #     # Bach cau nieu
-    #     bachcaunieu = False
-    #     bach_cau_nieu = self.extractor.get_variable_data(
-    #         variable_name="Bạch cầu niệu", 
-    #         subject_id=subject_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year,
-    #         out_time= out_time
-    #     )
-    #     for sample in bach_cau_nieu.itertuples():
-    #         if sample.valuenum > 5:
-    #             bachcaunieu = True
-    #             first_time1 = min(first_time1, sample.charttime)
         
-    #     # Mu nieu
-    #     munieu = False
-    #     mu_nieu = self.extractor.get_variable_data(
-    #         variable_name="Mủ niệu", 
-    #         subject_id=subject_id,
-    #         in_time= in_time,
-    #         time_process_func= process_time_without_year,
-    #         out_time= out_time
-    #     )
-    #     for sample in mu_nieu.itertuples():
-    #         if sample.valuenum > 5:
-    #             munieu = True
-    #             first_time1 = min(first_time1, sample.charttime)
-
-    #     # Nitrat nieu
-    #     positive_values = ['POS', 'POSITIVE', 'P']
-    #     nitratnieu = False
-    #     nitrat_nieu = self.extractor.get_variable_data(
-    #         variable_name="Nitrat niệu", 
-    #         subject_id=subject_id,
-    #         in_time= in_time, 
-    #         out_time= out_time,
-    #         time_process_func= process_time_without_year
-    #     )
-    #     for sample in nitrat_nieu.itertuples():
-    #         val_str = str(sample.value).strip().upper()
-    #         if val_str in positive_values:
-    #             nitratnieu = True
-    #             first_time1 = min(first_time1, sample.charttime)
-
-    #     trieuchung2 = bachcaunieu or munieu or cay_nuoc_tieu_duong_tinh or nitratnieu
-        
-    #     thoi_gian_dat_ong_thong_tieu = False
-    #     ong_thong_tieu = self.extractor.get_variable_data(
-    #         variable_name="Thời gian đặt ống thông tiểu",
-    #         subject_id = subject_id,
-    #         in_time= in_time,
-    #         out_time= out_time,
-    #         time_process_func= process_time_without_year,
-    #         check_48h = False
-    #     )
-    #     for sample in ong_thong_tieu.itertuples(index=True, name='Pandas'):
-    #         if first_time1 != FAR_FUTURE and first_time1 - sample.starttime >= pd.Timedelta(days=2):
-    #             thoi_gian_dat_ong_thong_tieu = True
-    #             break
-        
-    #     r1 = False
-    #     r2 =  trieuchung1 and trieuchung2 and thoi_gian_dat_ong_thong_tieu
-    #     final_cauti = r1 or r2
-
-    #     if self.verbose:
-    #         print("\n===== FINAL CAUTI =====")
-    #         print("rule1:", r1)
-    #         print("rule2:", r2)
-    #         print("=> FINAL CAUTI:", final_cauti)
-
-    #     return {
-    #         "rule1": r1,
-    #         "rule2": r2,
-    #         "final_cauti": final_cauti
-    #     }
-
     def check_cauti_subject(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
         FAR_FUTURE = pd.Timestamp('2001-01-01')
-        forty_eight_hours = pd.Timedelta(hours=48)
+        first_time1 = FAR_FUTURE
+        first_time2 = FAR_FUTURE
+
+        # =========== RULE 1 ===========
+        # Sốt
+        sot = False
+        nhiet_do = self._get_cached_data("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        if not nhiet_do.empty:
+            mask = ((nhiet_do['itemid'] == 223761) & (nhiet_do['valuenum'] > 100.4)) | \
+                   ((nhiet_do['itemid'] == 223762) & (nhiet_do['valuenum'] > 38))
+            df_sot = nhiet_do[mask]
+            if not df_sot.empty:
+                sot = True
+                first_time1 = min(first_time1, df_sot['charttime'].min()) 
+
+        # Tiểu gấp
+        tieugap = False
+        tieu_gap = self._get_cached_data("Tiểu gấp", subject_id=subject_id, out_time=out_time, in_time=in_time)
+        if not tieu_gap.empty:
+            tieugap = True
+            first_time1 = min(first_time1, tieu_gap['charttime'].min())
+
+        # Tiểu nhiều
+        tieunhieu = False
+        tieu_nhieu = self._get_cached_data("Tiểu nhiều lần", subject_id=subject_id, out_time=out_time, in_time=in_time)
+        if not tieu_nhieu.empty:
+            tieunhieu = True
+            first_time1 = min(first_time1, tieu_nhieu['charttime'].min())
+                
+        # Tiểu buốt
+        tieubuot = False
+        tieu_buot = self._get_cached_data("Tiểu buốt", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        if not tieu_buot.empty:
+            tieubuot = True
+            first_time1 = min(first_time1, tieu_buot['charttime'].min())
         
-        # Hàm hỗ trợ để lấy danh sách thời gian của một triệu chứng cụ thể
-        def get_symptom_times(var_name, is_temp=False, check_val=False, val_threshold=0):
-            df = self.extractor.get_variable_data(
-                variable_name=var_name, subject_id=subject_id, stay_id=stay_id,
-                in_time=in_time, time_process_func=process_time_without_year, out_time=out_time
-            )
-            times = []
-            if not df.empty:
-                for row in df.itertuples(index=True, name='Pandas'):
-                    if is_temp:
-                         if (row.itemid == 223761 and row.valuenum > 100.4) or (row.itemid == 223762 and row.valuenum > 38):
-                             times.append(row.charttime)
-                    elif check_val:
-                         if pd.to_numeric(row.valuenum, errors='coerce') > val_threshold:
-                             times.append(row.charttime)
-                    else:
-                        times.append(row.charttime)
-            return times
+        # Đau hông sườn
+        dauhongsuon = False
+        dau_hong_suon = self._get_cached_data("Đau hông sườn", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        if not dau_hong_suon.empty:
+            dauhongsuon = True
+            first_time1 = min(first_time1, dau_hong_suon['charttime'].min())
 
-        # 1. Thu thập thời gian của tất cả các triệu chứng (Triệu chứng 1)
-        sot_times = get_symptom_times("Nhiệt độ", is_temp=True)
-        tieu_gap_times = get_symptom_times("Tiểu gấp")
-        tieu_nhieu_times = get_symptom_times("Tiểu nhiều lần")
-        tieu_buot_times = get_symptom_times("Tiểu buốt")
-        dau_hong_times = get_symptom_times("Đau hông sườn")
-        dau_xuong_mu_times = get_symptom_times("Đau/ấn đau vùng trên xương mu")
+        # Đau xương mu
+        dauxuongmu = False
+        dau_xuong_mu = self._get_cached_data("Đau/ấn đau vùng trên xương mu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        if not dau_xuong_mu.empty:
+            dauxuongmu = True
+            first_time1 = min(first_time1, dau_xuong_mu['charttime'].min())
 
-        all_symptom_times = sot_times + tieu_gap_times + tieu_nhieu_times + tieu_buot_times + dau_hong_times + dau_xuong_mu_times
-        all_symptom_times.sort()
+        # Dùng hàm any() thay vì phép cộng (+) cho biến boolean
+        trieuchung1 = any([sot, tieugap, tieubuot, tieunhieu, dauhongsuon, dauxuongmu])
+        trieuchung1_mintime = first_time1
 
-        # 2. Thu thập thời gian của các phát hiện lâm sàng (Triệu chứng 2)
-        bach_cau_times = get_symptom_times("Bạch cầu niệu", check_val=True, val_threshold=5)
-        mu_nieu_times = get_symptom_times("Mủ niệu", check_val=True, val_threshold=5)
+        # Cay nuoc tieu
+        cay_nuoc_tieu_duong_tinh = False
+        cay_nuoc_tieu = self._get_cached_data("Cấy nước tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         
-        nitrat_times = []
-        nitrat_df = self.extractor.get_variable_data(
-            variable_name="Nitrat niệu", subject_id=subject_id, in_time=in_time, 
-            out_time=out_time, time_process_func=process_time_without_year
-        )
-        if not nitrat_df.empty:
-            positive_values = ['POS', 'POSITIVE', 'P']
-            for row in nitrat_df.itertuples():
-                if str(row.value).strip().upper() in positive_values:
-                    nitrat_times.append(row.charttime)
-
-        # Xử lý Cấy Nước Tiểu (yêu cầu 2 mẫu cùng loại vi khuẩn trong thời gian ngắn)
-        cay_nuoc_tieu_times = []
-        cay_nt_df = self.extractor.get_variable_data(
-            variable_name="Cấy nước tiểu", subject_id=subject_id, in_time=in_time, 
-            out_time=out_time, time_process_func=process_time_without_year
-        )
-        
-        # (LƯU Ý: Bạn cần bổ sung logic kiểm tra >= 10^2 CFU/mL vào đây nếu dữ liệu có hỗ trợ)
-        if not cay_nt_df.empty and 'charttime' in cay_nt_df.columns and 'org_name' in cay_nt_df.columns:
-            cay_nt_df = cay_nt_df.sort_values(by=['org_name', 'charttime'])
-            records = list(cay_nt_df.itertuples(index=True, name='Pandas'))
-            for i in range(len(records)):
-                for j in range(i + 1, len(records)):
-                    if records[i].org_name == records[j].org_name and pd.notna(records[i].org_name):
-                        time_diff = records[j].charttime - records[i].charttime
-                        if pd.Timedelta(0) <= time_diff <= forty_eight_hours:
-                            # Lưu thời điểm của mẫu cấy đầu tiên thỏa mãn
-                            cay_nuoc_tieu_times.append(records[i].charttime) 
-                            break
-
-        all_finding_times = bach_cau_times + mu_nieu_times + nitrat_times + cay_nuoc_tieu_times
-        all_finding_times.sort()
-
-        # Lấy dữ liệu ống thông
-        ong_thong_df = self.extractor.get_variable_data(
-            variable_name="Thời gian đặt ống thông tiểu", subject_id=subject_id,
-            in_time=in_time, out_time=out_time, time_process_func=process_time_without_year, check_48h=False
-        )
-
-        # 3. Đánh giá Logic Cốt Lõi (Tìm Cửa Sổ Nhiễm Trùng - IWP)
-        r2 = False
-        date_of_event = FAR_FUTURE
-
-        # Tìm một thời điểm phát hiện lâm sàng (Triệu chứng 2) làm mốc
-        for finding_time in all_finding_times:
-            # Kiểm tra xem có >= 2 triệu chứng lâm sàng (Triệu chứng 1) xung quanh thời điểm này không
-            # (Giả sử cửa sổ là +/- 3 ngày, theo chuẩn NHSN)
-            window_start = finding_time - pd.Timedelta(days=3)
-            window_end = finding_time + pd.Timedelta(days=3)
+        if not cay_nuoc_tieu.empty and 'charttime' in cay_nuoc_tieu.columns and 'quantity' in cay_nuoc_tieu.columns:
+            # Điều kiện 1: quantity > 100,000
+            mask_quantity = cay_nuoc_tieu['quantity'].astype(str).str.strip().str.contains(">100,000", case=False, na=False)
             
-            symptoms_in_window = [t for t in all_symptom_times if window_start <= t <= window_end]
+            # Khởi tạo df_cay_valid mặc định
+            df_cay_valid = pd.DataFrame()
             
-            # Đếm số lượng triệu chứng ĐỘC LẬP trong cửa sổ (để tránh đếm 2 lần sốt là 2 triệu chứng)
-            unique_symptoms_count = 0
-            if any(window_start <= t <= window_end for t in sot_times): unique_symptoms_count += 1
-            if any(window_start <= t <= window_end for t in tieu_gap_times): unique_symptoms_count += 1
-            if any(window_start <= t <= window_end for t in tieu_nhieu_times): unique_symptoms_count += 1
-            if any(window_start <= t <= window_end for t in tieu_buot_times): unique_symptoms_count += 1
-            if any(window_start <= t <= window_end for t in dau_hong_times): unique_symptoms_count += 1
-            if any(window_start <= t <= window_end for t in dau_xuong_mu_times): unique_symptoms_count += 1
-
-            if unique_symptoms_count >= 2:
-                # Đã tìm thấy một cửa sổ nhiễm trùng hợp lệ
-                date_of_event = finding_time
-                break
-
-        # 4. Kiểm tra điều kiện Ống thông
+            if 'comments' in cay_nuoc_tieu.columns:
+                mask_comments = cay_nuoc_tieu['comments'].isna()
+                df_cay_valid = cay_nuoc_tieu[mask_quantity & mask_comments]
+            else:
+                df_cay_valid = cay_nuoc_tieu[mask_quantity]
+            
+            if not df_cay_valid.empty:
+                cay_nuoc_tieu_duong_tinh = True
+                first_time1 = min(first_time1, df_cay_valid['charttime'].min())
+            
         thoi_gian_dat_ong_thong_tieu = False
-        if date_of_event != FAR_FUTURE and not ong_thong_df.empty:
-            for sample in ong_thong_df.itertuples(index=True, name='Pandas'):
-                # Ống thông phải được đặt ít nhất 2 ngày trước Date of Event
-                if (date_of_event - sample.starttime) >= pd.Timedelta(days=2):
-                    thoi_gian_dat_ong_thong_tieu = True
-                    break
+        ong_thong_tieu = self._get_cached_data("Thời gian đặt ống thông tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time, check_48h=False)
+        
+        if first_time1 != FAR_FUTURE and not ong_thong_tieu.empty and 'starttime' in ong_thong_tieu.columns:
+            # Tạo mặt nạ kiểm tra: Thời gian đầu tiên xuất hiện triệu chứng - thời gian bắt đầu đặt >= 2 ngày
+            mask_ong_thong = (first_time1 - ong_thong_tieu['starttime']) >= pd.Timedelta(days=2)
+            # Nếu có BẤT KỲ dòng nào thỏa mãn (any) -> True
+            if mask_ong_thong.any():
+                thoi_gian_dat_ong_thong_tieu = True
+        
+        r1 = trieuchung1 and cay_nuoc_tieu_duong_tinh and thoi_gian_dat_ong_thong_tieu
 
-        if date_of_event != FAR_FUTURE and thoi_gian_dat_ong_thong_tieu:
-            r2 = True
+        # =========== RULE 2 ===========
 
-        r1 = False # Theo code của bạn, Rule 1 đang là False mặc định
+        # ---------------------------------------------------------
+        # 1. TRIỆU CHỨNG LÂM SÀNG (trieuchung1)
+        # ---------------------------------------------------------
+        if (sot + tieugap + tieubuot + tieunhieu + dauhongsuon + dauxuongmu) >= 2:
+            trieuchung1 = True
+        first_time2 = trieuchung1_mintime
+
+        # ---------------------------------------------------------
+        # 2. XÉT NGHIỆM / CẬN LÂM SÀNG (trieuchung2)
+        # ---------------------------------------------------------
+        
+        # Cấy nước tiểu (Tối ưu bằng .duplicated thay vì vòng lặp set)
+        cay_nuoc_tieu_duong_tinh = False
+        cay_nuoc_tieu = self._get_cached_data("Cấy nước tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        if not cay_nuoc_tieu.empty and 'charttime' in cay_nuoc_tieu.columns and 'org_name' in cay_nuoc_tieu.columns:
+            # Lọc bỏ các dòng NaN
+            df_cay_valid = cay_nuoc_tieu[cay_nuoc_tieu['org_name'].notna()].sort_values('charttime')
+            # Lọc ra các dòng bị lặp lại tên vi khuẩn (xuất hiện >= 2 lần)
+            dups = df_cay_valid[df_cay_valid.duplicated(subset=['org_name'], keep='first')]
+            if not dups.empty:
+                cay_nuoc_tieu_duong_tinh = True
+                first_time2 = min(first_time2, dups['charttime'].min())
+
+        # Bạch cầu niệu
+        bachcaunieu = False
+        bach_cau_nieu = self._get_cached_data("Bạch cầu niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        if not bach_cau_nieu.empty and 'valuenum' in bach_cau_nieu.columns:
+            df_bcn = bach_cau_nieu[bach_cau_nieu['valuenum'] > 5]
+            if not df_bcn.empty:
+                bachcaunieu = True
+                first_time2 = min(first_time2, df_bcn['charttime'].min())
+        
+        # Mủ niệu
+        munieu = False
+        mu_nieu = self._get_cached_data("Mủ niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        if not mu_nieu.empty and 'valuenum' in mu_nieu.columns:
+            df_mn = mu_nieu[mu_nieu['valuenum'] > 5]
+            if not df_mn.empty:
+                munieu = True
+                first_time2 = min(first_time2, df_mn['charttime'].min())
+
+        # Nitrat niệu (Tối ưu bằng xử lý chuỗi .str)
+        nitratnieu = False
+        nitrat_nieu = self._get_cached_data("Nitrat niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        if not nitrat_nieu.empty and 'value' in nitrat_nieu.columns:
+            positive_values = ['POS', 'POSITIVE', 'P']
+            # Chuyển thành text -> Cắt khoảng trắng -> In hoa -> Kiểm tra xem có nằm trong list dương tính không
+            mask_nitrat = nitrat_nieu['value'].astype(str).str.strip().str.upper().isin(positive_values)
+            df_nitrat = nitrat_nieu[mask_nitrat]
+            if not df_nitrat.empty:
+                nitratnieu = True
+                first_time2 = min(first_time2, df_nitrat['charttime'].min())
+
+        trieuchung2 = any([bachcaunieu, munieu, cay_nuoc_tieu_duong_tinh, nitratnieu])
+        
+        # ---------------------------------------------------------
+        # 3. ĐIỀU KIỆN ỐNG THÔNG TIỂU
+        # ---------------------------------------------------------
+        thoi_gian_dat_ong_thong_tieu = False
+        ong_thong_tieu = self._get_cached_data("Thời gian đặt ống thông tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time, check_48h=False)
+        
+        if first_time2 != FAR_FUTURE and not ong_thong_tieu.empty and 'starttime' in ong_thong_tieu.columns:
+            # Tạo mặt nạ kiểm tra: Thời gian đầu tiên xuất hiện triệu chứng - thời gian bắt đầu đặt >= 2 ngày
+            mask_ong_thong = (first_time2 - ong_thong_tieu['starttime']) >= pd.Timedelta(days=2)
+            # Nếu có BẤT KỲ dòng nào thỏa mãn (any) -> True
+            if mask_ong_thong.any():
+                thoi_gian_dat_ong_thong_tieu = True
+        
+        # =========================================================
+        # TỔNG HỢP FINAL
+        # =========================================================
+        r2 = trieuchung1 and trieuchung2 and thoi_gian_dat_ong_thong_tieu
         final_cauti = r1 or r2
 
         if self.verbose:
@@ -1007,7 +782,123 @@ class InfectionChecker:
         }
 
 
+#     def check_cauti_subject(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
+#         # Đã đổi thành Timestamp.max để đảm bảo hàm min() hoạt động đúng với dữ liệu năm 2000
+#         FAR_FUTURE = pd.Timestamp.max
+#         first_time1 = FAR_FUTURE
+
+#         # =========== RULE 2 ===========
+#         # BƯỚC 1: LẤY DANH SÁCH THỜI GIAN CỦA TẤT CẢ TRIỆU CHỨNG (Không dùng min() ở đây nữa)
+        
+#         # Sot
+#         nhiet_do = self.extractor.get_variable_data(variable_name="Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time, time_process_func=process_time_without_year)
+#         times_sot = [t.charttime for t in nhiet_do.itertuples() if (t.itemid == 223761 and t.valuenum > 100.4) or (t.itemid == 223762 and t.valuenum > 38)]
+
+#         # Tieu gap
+#         tieu_gap = self.extractor.get_variable_data(variable_name="Tiểu gấp", subject_id=subject_id, in_time=in_time, time_process_func=process_time_without_year, out_time=out_time)
+#         times_tieugap = [t.charttime for t in tieu_gap.itertuples()]
+
+#         # Tieu nhieu
+#         tieu_nhieu = self.extractor.get_variable_data(variable_name="Tiểu nhiều lần", subject_id=subject_id, in_time=in_time, time_process_func=process_time_without_year, out_time=out_time)
+#         times_tieunhieu = [t.charttime for t in tieu_nhieu.itertuples()]
+        
+#         # Tieu buot
+#         tieu_buot = self.extractor.get_variable_data(variable_name="Tiểu buốt", subject_id=subject_id, in_time=in_time, time_process_func=process_time_without_year, out_time=out_time)
+#         times_tieubuot = [t.charttime for t in tieu_buot.itertuples()]
+        
+#         # Dau hong suon
+#         dau_hong_suon = self.extractor.get_variable_data(variable_name="Đau hông sườn", subject_id=subject_id, in_time=in_time, time_process_func=process_time_without_year, out_time=out_time)
+#         times_dauhong = [t.charttime for t in dau_hong_suon.itertuples()]
+
+#         # Dau xuong mu
+#         dau_xuong_mu = self.extractor.get_variable_data(variable_name="Đau/ấn đau vùng trên xương mu", subject_id=subject_id, in_time=in_time, time_process_func=process_time_without_year, out_time=out_time)
+#         times_dauxuongmu = [t.charttime for t in dau_xuong_mu.itertuples()]
+
+#         # Gom tất cả các mảng thời gian triệu chứng vào 1 list để tiện kiểm tra
+#         danh_sach_trieu_chung = [times_sot, times_tieugap, times_tieunhieu, times_tieubuot, times_dauhong, times_dauxuongmu]
 
 
+#         # BƯỚC 2: LẤY DANH SÁCH THỜI ĐIỂM XÉT NGHIỆM DƯƠNG TÍNH (MỎ NEO THỜI GIAN)
+#         thoi_diem_xet_nghiem = []
+
+#         # Cay nuoc tieu
+#         cay_nuoc_tieu = self.extractor.get_variable_data(variable_name="Cấy nước tiểu", subject_id=subject_id, in_time=in_time, time_process_func=process_time_without_year, out_time=out_time)
+#         if not cay_nuoc_tieu.empty and 'charttime' in cay_nuoc_tieu.columns:
+#             cay_nuoc_tieu = cay_nuoc_tieu.sort_values('charttime', ascending=True)
+#             loai_vi_sinh_vat = set()
+#             for sample in cay_nuoc_tieu.itertuples():
+#                 if pd.notna(sample.org_name):
+#                     if sample.org_name in loai_vi_sinh_vat:
+#                         thoi_diem_xet_nghiem.append(sample.charttime) # Tìm thấy mẫu lặp lại
+#                     else:
+#                         loai_vi_sinh_vat.add(sample.org_name)
+
+#         # Bach cau nieu
+#         bach_cau_nieu = self.extractor.get_variable_data(variable_name="Bạch cầu niệu", subject_id=subject_id, in_time=in_time, time_process_func=process_time_without_year, out_time=out_time)
+#         for sample in bach_cau_nieu.itertuples():
+#             if sample.valuenum > 5:
+#                 thoi_diem_xet_nghiem.append(sample.charttime)
+        
+#         # Mu nieu
+#         mu_nieu = self.extractor.get_variable_data(variable_name="Mủ niệu", subject_id=subject_id, in_time=in_time, time_process_func=process_time_without_year, out_time=out_time)
+#         for sample in mu_nieu.itertuples():
+#             if sample.valuenum > 5:
+#                 thoi_diem_xet_nghiem.append(sample.charttime)
+
+#         # Nitrat nieu
+#         positive_values = ['POS', 'POSITIVE', 'P']
+#         nitrat_nieu = self.extractor.get_variable_data(variable_name="Nitrat niệu", subject_id=subject_id, in_time=in_time, out_time=out_time, time_process_func=process_time_without_year)
+#         for sample in nitrat_nieu.itertuples():
+#             val_str = str(sample.value).strip().upper()
+#             if val_str in positive_values:
+#                 thoi_diem_xet_nghiem.append(sample.charttime)
 
 
+#         # BƯỚC 3: KIỂM TRA ĐỒNG THỜI (TÌM FIRST_TIME1 THỰC SỰ)
+#         trieuchung1 = False
+#         trieuchung2 = False
+
+#         # Quét từng mốc thời gian xét nghiệm dương tính
+#         for tx in thoi_diem_xet_nghiem:
+#             trieuchung2 = True # Đã có xét nghiệm dương tính
+#             so_luong_trieu_chung_xay_ra = 0
+            
+#             # Kiểm tra xem quanh lúc xét nghiệm này (+/- 3 ngày) có triệu chứng lâm sàng nào không
+#             for tc_times in danh_sach_trieu_chung:
+#                 if any(abs(tc - tx) <= pd.Timedelta(days=3) for tc in tc_times):
+#                     so_luong_trieu_chung_xay_ra += 1
+            
+#             if so_luong_trieu_chung_xay_ra >= 2:
+#                 trieuchung1 = True
+#                 first_time1 = min(first_time1, tx) # Đây mới là lúc chốt first_time1
+#                 break 
+
+        
+#         # BƯỚC 4: KIỂM TRA ĐIỀU KIỆN ỐNG THÔNG
+#         thoi_gian_dat_ong_thong_tieu = False
+#         if first_time1 != FAR_FUTURE:
+#             ong_thong_tieu = self.extractor.get_variable_data(
+#                 variable_name="Thời gian đặt ống thông tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time, time_process_func=process_time_without_year, check_48h=False
+#             )
+#             for sample in ong_thong_tieu.itertuples():
+#                 if first_time1 - sample.starttime >= pd.Timedelta(days=2):
+#                     thoi_gian_dat_ong_thong_tieu = True
+#                     break
+        
+#         r1 = False
+#         r2 = trieuchung1 and trieuchung2 and thoi_gian_dat_ong_thong_tieu
+#         final_cauti = r1 or r2
+
+#         if self.verbose:
+#             print("\n===== FINAL CAUTI =====")
+#             print("rule1:", r1)
+#             print("rule2:", r2)
+#             print("=> FINAL CAUTI:", final_cauti)
+
+#         return {
+#             "rule1": r1,
+#             "rule2": r2,
+#             "final_cauti": final_cauti
+#         }
+
+    
