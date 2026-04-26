@@ -59,7 +59,7 @@ class ClinicalDataExtractor:
             MappingRule("Ho", "chartevents", lookup_column="itemid", lookup_value=223991, value_column="value", time_column="charttime", stay_id_column="stay_id"),
             MappingRule("Ho", "chartevents", lookup_column="itemid", lookup_value=223992, value_column="value", time_column="charttime", stay_id_column="stay_id"),
             MappingRule("Đờm mủ", "chartevents", lookup_column="itemid", lookup_value=224370, value_column="value", time_column="charttime", stay_id_column="stay_id"),
-            MappingRule("Nhịp thở", "chartevents", lookup_column="itemid", lookup_value=230042, value_column="valuenum", time_column="charttime", stay_id_column="stay_id"),
+            MappingRule("Nhịp thở", "chartevents", lookup_column="itemid", lookup_value=220210, value_column="valuenum", time_column="charttime", stay_id_column="stay_id"),
             MappingRule("SpO2", "chartevents", lookup_column="itemid", lookup_value=220277, value_column="valuenum", time_column="charttime", stay_id_column="stay_id"),
             MappingRule("Cần hỗ trợ oxy", "chartevents", lookup_column="itemid", lookup_value=226732, value_column="value", time_column="charttime", stay_id_column="stay_id"),
             MappingRule("FiO2", "chartevents", lookup_column="itemid", lookup_value=223835, value_column="valuenum", time_column="charttime", stay_id_column="stay_id"),

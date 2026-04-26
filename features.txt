@@ -1,0 +1,22 @@
+spo2: true- false
+sot: valuenum
+ho: weak_ strong
+dom: true (clear)- false(màu khác)
+nhip_tho: valuenum 
+rale: true_false (in lung_keywords: true, else: false)
+xray: xsuat
+cay_dich: true_false
+# clabsi
+cay_mau: true_false 
+on_lanh: true - false
+huyet_ap: valuenum
+tieu_gap: true false
+tieu nhieu: true false
+tieu buot: true false
+dauhongsuon: true false
+dauxuongmu: true false
+cay nuoc tieu_rule1: true false
+cay nuoc tieu_rule2: true false
+bachcaunieu: valuenum 
+munieu: valuenum 
+nitrat: true false

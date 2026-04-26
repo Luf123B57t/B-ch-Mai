@@ -3,17 +3,21 @@ from features_mapping import ClinicalDataExtractor
 from Rules import InfectionChecker, process_time_without_year
 from tqdm.notebook import tqdm
 
-NROWS = 15000000
+# NROWS = 15000000
+parquet_dir = r'/home/user04/Yte_BachMai/dataset/parquet'
 
-print("Read .csv files...")
-chartevent = pd.read_csv(r'/home/user04/Yte_BachMai/dataset/mimic-iv-3.1/icu/chartevents.csv', nrows = 4*NROWS)
-discharge = pd.read_csv(r'/home/user04/Yte_BachMai/dataset/note/discharge.csv', nrows = NROWS)
-microbiologyevent = pd.read_csv(r'/home/user04/Yte_BachMai/dataset/mimic-iv-3.1/hosp/microbiologyevents.csv', nrows = NROWS, low_memory=False)
-procedureevent = pd.read_csv(r'/home/user04/Yte_BachMai/dataset/mimic-iv-3.1/icu/procedureevents.csv', nrows = NROWS)
-radiologyevent = pd.read_csv(r'/home/user04/Yte_BachMai/dataset/note/radiology.csv', nrows = NROWS)
-# radiologyevent = pd.read_csv(r'D:\AI4LIFE\Y_te\B-ch-Mai\findings.csv', nrows = 20000)
-icu_stay_raw = pd.read_csv(r'/home/user04/Yte_BachMai/dataset/mimic-iv-3.1/icu/icustays.csv')
-labevent = pd.read_csv(r'/home/user04/Yte_BachMai/dataset/mimic-iv-3.1/hosp/labevents.csv', nrows = 3*NROWS)
+print("Read .parquet files...")
+cols_chart = ['subject_id', 'stay_id', 'charttime', 'itemid', 'value', 'valuenum']
+chartevent = pd.read_parquet(f'{parquet_dir}/chartevents_full.parquet', columns=cols_chart)
+
+cols_lab = ['subject_id', 'itemid', 'charttime', 'value', 'valuenum', 'comments']
+labevent = pd.read_parquet(f'{parquet_dir}/labevents_full.parquet', columns=cols_lab)
+
+discharge = pd.read_parquet(f'{parquet_dir}/discharge.parquet')
+microbiologyevent = pd.read_parquet(f'{parquet_dir}/microbiologyevents.parquet')
+procedureevent = pd.read_parquet(f'{parquet_dir}/procedureevents.parquet')
+radiologyevent = pd.read_parquet(f'{parquet_dir}/radiology.parquet')
+icu_stay_raw = pd.read_parquet(f'{parquet_dir}/icustays.parquet')
 
 valid_subject_ids = chartevent['subject_id'].unique()
 icu_stay = icu_stay_raw[icu_stay_raw['subject_id'].isin(valid_subject_ids)].copy()
