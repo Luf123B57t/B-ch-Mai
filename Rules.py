@@ -29,6 +29,31 @@ def process_time_without_year(date_series):
         if pd.notnull(dt_series):
             return dt_series.replace(year=2000)
         return dt_series  # Trả về NaT nếu giá trị truyền vào là null/rỗng
+    
+def get_row_time(row):
+    time_col = row.get("mapped_time_column", None)
+
+    if pd.notna(time_col) and time_col in row.index:
+        return row[time_col]
+
+    for col in ["charttime", "chartdate", "starttime"]:
+        if col in row.index and pd.notna(row[col]):
+            return row[col]
+
+    return pd.NaT
+
+
+def get_row_value(row):
+    value_col = row.get("mapped_value_column", None)
+
+    if pd.notna(value_col) and value_col in row.index:
+        return row[value_col]
+
+    for col in ["valuenum", "value", "org_name", "text"]:
+        if col in row.index and pd.notna(row[col]):
+            return row[col]
+
+    return None
 
 class InfectionChecker:
     """Class quản lý việc kiểm tra các loại nhiễm trùng (HAIs) của bệnh nhân."""
@@ -841,3 +866,106 @@ class InfectionChecker:
             "rule2": r2,
             "final_cauti": final_cauti
         }
+
+    def get_cauti_features(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
+        clabsi_criteria = [
+        "Cấy máu",
+        "Ho",
+        "Đờm mủ",
+        "Nhịp thở",
+        "SpO2",
+        "Cần hỗ trợ oxy",
+        "FiO2",
+        "Rale",
+        "Tiếng thở phế quản",
+        "Cấy dịch đường hô hấp",
+        "Cấy máu",
+        "X-quang ngực",
+        "CT scan lồng ngực",
+        "Thời gian thở máy"
+    ]
+
+
+    flat_rows = []
+
+    patient_stays = icu_stay[icu_stay["subject_id"] == subject_id].copy()
+
+    for _, stay_row in patient_stays.iterrows():
+        stay_id = stay_row["stay_id"]
+        in_time = process_time_without_year(stay_row["intime"])
+        out_time = process_time_without_year(stay_row["outtime"])
+
+        for criteria in vap_criteria:
+            try:
+                df = extractor.get_variable_data(
+                    variable_name=criteria,
+                    subject_id=subject_id,
+                    stay_id=stay_id,
+                    in_time=in_time,
+                    time_process_func=process_time_without_year
+                )
+            except Exception as e:
+                print(f"Lỗi khi lấy {criteria} cho stay_id={stay_id}: {e}")
+                continue
+
+            if df.empty:
+                continue
+
+            for _, row in df.iterrows():
+                charttime = get_row_time(row)
+                value = get_row_value(row)
+
+                charttime = process_time_without_year(charttime)
+
+                if pd.isna(charttime):
+                    continue
+
+                # bỏ dữ liệu trước ICU intime
+                if charttime < in_time:
+                    continue
+
+                # nếu muốn chỉ lấy trong ICU stay thì giữ dòng này
+                if pd.notna(out_time) and charttime > out_time:
+                    continue
+
+                day_date = charttime.normalize()
+
+                flat_rows.append({
+                    "subject_id": subject_id,
+                    "stay_id": stay_id,
+                    "day_date": day_date,
+                    "criteria": criteria,
+                    "charttime": charttime,
+                    "value": value
+                })
+
+    df_patient_detail = pd.DataFrame(
+        flat_rows,
+        columns=["subject_id", "stay_id", "day_date", "criteria", "charttime", "value"]
+    )
+
+    if df_patient_detail.empty:
+        print("Không có dữ liệu sau khi lọc.")
+    else:
+        df_patient_detail = df_patient_detail.sort_values(
+            ["stay_id", "day_date", "criteria", "charttime"]
+        )
+
+        for stay_id, df_stay in df_patient_detail.groupby("stay_id"):
+            print(f"\nICU STAY: {stay_id}")
+
+            for day_date in sorted(df_stay["day_date"].unique()):
+                df_day = df_stay[df_stay["day_date"] == day_date]
+                print(f"  {pd.to_datetime(day_date).strftime('%Y-%m-%d')}:")
+
+                for criteria in vap_criteria:
+                    df_c = df_day[df_day["criteria"] == criteria].sort_values("charttime")
+
+                    print(f"    {criteria}:")
+
+                    if df_c.empty:
+                        print("      Không có dữ liệu")
+                    else:
+                        for _, r in df_c.iterrows():
+                            print(f"      {r['charttime']} - {r['value']}")
+    
