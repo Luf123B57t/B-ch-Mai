@@ -393,7 +393,7 @@ class InfectionChecker:
         imaging_positive = False
 
         xray = self.get_data_with_48h_rule("X-quang ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
-        ct = self.get_data_with_48h_rule("CT scan lồng ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        # ct = self.get_data_with_48h_rule("CT scan lồng ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
 
         THRESHOLD = 0.35
         MAX_LENGTH = 256
@@ -934,7 +934,152 @@ class InfectionChecker:
         }
 
     def get_vap_features(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
-        pass
+        vap_criteria = [
+            "Nhiệt độ",
+            "Ho",
+            "Đờm mủ",
+            "Nhịp thở",
+            "SpO2",
+            "Cần hỗ trợ oxy",
+            "FiO2",
+            "Rale",
+            "Tiếng thở phế quản",
+            "Cấy dịch đường hô hấp",
+            "Cấy máu",
+        ]
+
+        vap_criteria_order = vap_criteria + [
+            "Thở máy",
+            "Imaging VAP (X-quang/CT)",
+        ]
+        vap_flat_rows = []
+        for criteria in vap_criteria:
+            try:
+                df = self._fetch_and_cache_raw_data(criteria, subject_id=subject_id, stay_id=stay_id, in_time=in_time, out_time=out_time)
+            except Exception as e:
+                print(f"Lỗi VAP {criteria} | subject_id={subject_id}, stay_id={stay_id}: {e}")
+                continue
+
+            if df.empty:
+                continue
+
+            for _, row in df.iterrows():
+                charttime = process_time_without_year(get_row_time(row))
+                value = get_row_value(row)
+
+                if pd.isna(charttime):
+                    continue
+
+                if charttime < in_time:
+                    continue
+
+                if pd.notna(out_time) and charttime > out_time:
+                    continue
+
+                vap_flat_rows.append({
+                    "subject_id": subject_id,
+                    "stay_id": stay_id,
+                    "day_date": charttime.normalize(),
+                    "criteria": criteria,
+                    "charttime": charttime,
+                    "value": value,
+                })
+
+        # =====================================================
+        # 4.2 VAP mechanical ventilation
+        # =====================================================
+        try:
+            tho_may = self._fetch_and_cache_raw_data(
+                variable_name="Thời gian thở máy",
+                subject_id=subject_id,
+                stay_id=stay_id,
+                in_time=in_time,
+                time_process_func=process_time_without_year,
+            )
+        except Exception as e:
+            print(f"Lỗi Thời gian thở máy | subject_id={subject_id}, stay_id={stay_id}: {e}")
+            tho_may = pd.DataFrame()
+
+        if not tho_may.empty:
+            for _, row in tho_may.iterrows():
+                starttime = process_time_without_year(row["starttime"]) if "starttime" in row.index else pd.NaT
+                endtime = process_time_without_year(row["endtime"]) if "endtime" in row.index else pd.NaT
+
+                if pd.isna(starttime):
+                    continue
+
+                if pd.isna(endtime):
+                    endtime = out_time
+
+                if pd.isna(endtime):
+                    continue
+
+                vent_start = max(starttime, in_time)
+                vent_end = min(endtime, out_time) if pd.notna(out_time) else endtime
+
+                if vent_end < vent_start:
+                    continue
+
+                current_day = vent_start.normalize()
+                last_day = vent_end.normalize()
+
+                while current_day <= last_day:
+                    day_start = current_day
+                    day_end = current_day + pd.Timedelta(days=1)
+
+                    display_starttime = max(vent_start, day_start)
+
+                    if display_starttime < day_end and vent_end >= day_start:
+                        vap_flat_rows.append({
+                            "subject_id": subject_id,
+                            "stay_id": stay_id,
+                            "day_date": current_day,
+                            "criteria": "Thở máy",
+                            "charttime": display_starttime,
+                            "value": f"starttime: {display_starttime} - endtime: {vent_end}",
+                        })
+
+                    current_day += pd.Timedelta(days=1)
+
+        # =====================================================
+        # 4.3 VAP imaging
+        # =====================================================
+        try:
+            imaging_positive = checker._get_vap_imaging_positive(
+                subject_id=subject_id,
+                stay_id=stay_id,
+                in_time=in_time,
+                out_time=out_time,
+            )
+        except TypeError:
+            imaging_positive = checker._get_vap_imaging_positive(
+                subject_id=subject_id,
+                stay_id=stay_id,
+                in_time=in_time,
+            )
+        except Exception as e:
+            print(f"Lỗi Imaging VAP | subject_id={subject_id}, stay_id={stay_id}: {e}")
+            imaging_positive = None
+
+        vap_flat_rows.append({
+            "subject_id": subject_id,
+            "stay_id": stay_id,
+            "day_date": in_time.normalize(),
+            "criteria": "Imaging VAP (X-quang/CT)",
+            "charttime": in_time,
+            "value": imaging_positive,
+        })
+
+        df_vap_detail = pd.DataFrame(
+            vap_flat_rows,
+            columns=["subject_id", "stay_id", "day_date", "criteria", "charttime", "value"],
+        )
+        vap_json = build_infection_json(
+            df_detail=df_vap_detail,
+            criteria_order=vap_criteria_order,
+        )
+        return vap_json
+
 
     def get_clabsi_features(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
         clabsi_criteria_stayid = [

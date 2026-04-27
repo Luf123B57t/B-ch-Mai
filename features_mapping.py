@@ -54,6 +54,7 @@ class ClinicalDataExtractor:
             "Tiểu buốt": ["dysuria", "painful urination", "burning on urination"],
             "Đau hông sườn": ["flank pain", "cva tenderness"],
             "Đau/ấn đau vùng trên xương mu": ["suprapubic pain", "suprapubic tenderness"],
+            "X-quang ngực": ["pneumonia, pna, bronchopneumonia, consolidation, infiltrate, infiltration, opacity, opacities, ground glass, ggo, air bronchogram, patchy, cloudy, hazy"]
         }
         
         self.central_line_locations = [
@@ -119,8 +120,9 @@ class ClinicalDataExtractor:
 
             # ===== RADIOLOGY =====
             # hadm_id_column set thành None vì trong code gốc bạn ghi rõ "hadm_id_column": None
-            MappingRule("X-quang ngực","radiology",lookup_column="note_type",lookup_value="Radiology",value_column="text",time_column="charttime",note_id_column="note_id"),
-            MappingRule("CT scan lồng ngực","radiology",lookup_column="note_type",lookup_value="Radiology",value_column="text",time_column="charttime",note_id_column="note_id"),
+            # MappingRule("X-quang ngực","radiology",lookup_column="note_type",lookup_value="Radiology",value_column="text",time_column="charttime",note_id_column="note_id"),
+            # MappingRule("CT scan lồng ngực","radiology",lookup_column="note_type",lookup_value="Radiology",value_column="text",time_column="charttime",note_id_column="note_id"),
+            MappingRule("X-quang ngực","radiology",value_column="note_type",time_column="charttime",note_id_column="note_id", lookup_operator="keyword_search")
         ]
         
         # Chuyển đổi thành DataFrame và loại bỏ trùng lặp
@@ -146,7 +148,7 @@ class ClinicalDataExtractor:
                     )
                 else:
                     series = df["text"].apply(
-                        lambda text: extract_section(text, "History of Present Illness")
+                        lambda text: extract_section(text, section_name= "FINDINGS")
                     )
                 
                 # 2. Thực hiện tìm kiếm từ khóa CHỈ trên phần HPI vừa cắt được
