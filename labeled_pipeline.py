@@ -5,7 +5,7 @@ from tqdm import tqdm
 import json
 
 # NROWS = 15000000
-parquet_dir = r'/home/user04/Yte_BachMai/dataset/parquet'
+parquet_dir = r'/home/user01/yte_BachMai/parquet'
 
 print("Read .parquet files...")
 cols_chart = ['subject_id', 'stay_id', 'charttime', 'itemid', 'value', 'valuenum']
