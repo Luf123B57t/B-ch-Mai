@@ -1,6 +1,21 @@
 import pandas as pd
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
+import re
+
+def extract_section(text, section_name):
+    if pd.isna(text):
+        return None
+
+    pattern = rf"{section_name}:\s*(.*?)(\n[A-Z][^\n]*:|\Z)"
+
+    match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+
+    if match:
+        return match.group(1).strip()
+    
+    return None
+
 
 # 1. Định nghĩa Schema cho một luật Mapping
 @dataclass
@@ -125,7 +140,19 @@ class ClinicalDataExtractor:
             keywords = self.keyword_map.get(row["variable_name"], [])
             if "text" in df.columns and keywords:
                 pattern = "|".join(keywords)
-                df = df[df["text"].str.contains(pattern, case=False, na=False, regex=True)]
+                if row["source_table"] == "discharge":
+                    series = df["text"].apply(
+                        lambda text: extract_section(text, section_name= "History of Present Illness")
+                    )
+                else:
+                    series = df["text"].apply(
+                        lambda text: extract_section(text, "History of Present Illness")
+                    )
+                
+                # 2. Thực hiện tìm kiếm từ khóa CHỈ trên phần HPI vừa cắt được
+                # Tham số na=False rất quan trọng vì extract_section có thể trả về None
+                df = df[series.str.contains(pattern, case=False, na=False, regex=True)]
+                
                 
         # Áp dụng bộ lọc thứ 2 nếu có
         if pd.notna(row["secondary_lookup_column"]):

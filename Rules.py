@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from features_mapping import ClinicalDataExtractor
 import torch
+import re
 from datasets import Dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
@@ -54,6 +55,67 @@ def get_row_value(row):
             return row[col]
 
     return None
+
+def safe_json_value(v):
+    if pd.isna(v):
+        return None
+
+    if isinstance(v, pd.Timestamp):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+
+    if hasattr(v, "item"):
+        return v.item()
+
+    return v
+
+def build_infection_json(df_detail, criteria_order):
+    all_subjects = []
+
+    if df_detail.empty:
+        return all_subjects
+
+    df_detail = df_detail.sort_values(
+        ["subject_id", "stay_id", "day_date", "criteria", "charttime"]
+    )
+
+    for subject_id, df_subject in df_detail.groupby("subject_id"):
+        subject_obj = {
+            "subject_id": int(subject_id),
+            "icu_stays": []
+        }
+
+        for stay_id, df_stay in df_subject.groupby("stay_id"):
+            stay_obj = {
+                "stay_id": int(stay_id),
+                "days": []
+            }
+
+            for day_date in sorted(df_stay["day_date"].unique()):
+                df_day = df_stay[df_stay["day_date"] == day_date]
+
+                day_obj = {
+                    "day_date": pd.to_datetime(day_date).strftime("%Y-%m-%d"),
+                    "criteria": {}
+                }
+
+                for criteria in criteria_order:
+                    df_c = df_day[df_day["criteria"] == criteria].sort_values("charttime")
+
+                    day_obj["criteria"][criteria] = [
+                        {
+                            "charttime": safe_json_value(r["charttime"]),
+                            "value": safe_json_value(r["value"]),
+                        }
+                        for _, r in df_c.iterrows()
+                    ]
+
+                stay_obj["days"].append(day_obj)
+
+            subject_obj["icu_stays"].append(stay_obj)
+
+        all_subjects.append(subject_obj)
+
+    return all_subjects
 
 class InfectionChecker:
     """Class quản lý việc kiểm tra các loại nhiễm trùng (HAIs) của bệnh nhân."""
@@ -618,9 +680,13 @@ class InfectionChecker:
         # On lanh
         onlanh = False
         on_lanh = self.get_data_with_48h_rule("Ớn lạnh", subject_id=subject_id, out_time=out_time, in_time=in_time)
+
         if not on_lanh.empty:
+
             onlanh = True
+
             min_charttime = on_lanh['charttime'].min()
+
             first_time2 = min(first_time2, min_charttime)
         
         # Huyết áp thấp
@@ -867,45 +933,26 @@ class InfectionChecker:
             "final_cauti": final_cauti
         }
 
-    def get_cauti_features(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
-        clabsi_criteria = [
-        "Cấy máu",
-        "Ho",
-        "Đờm mủ",
-        "Nhịp thở",
-        "SpO2",
-        "Cần hỗ trợ oxy",
-        "FiO2",
-        "Rale",
-        "Tiếng thở phế quản",
-        "Cấy dịch đường hô hấp",
-        "Cấy máu",
-        "X-quang ngực",
-        "CT scan lồng ngực",
-        "Thời gian thở máy"
-    ]
+    def get_vap_features(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
+        pass
 
+    def get_clabsi_features(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
+        clabsi_criteria_stayid = [
+            "Nhiệt độ", #stayid
+            "Ớn lạnh", #stayid
+            "Cấy máu" #stayid
+        ]
+        clabsi_criteria_non_stayid = ["Huyết áp tâm thu"]
+        criteria_order = clabsi_criteria_stayid + clabsi_criteria_non_stayid + [
+            "Thời gian đặt catheter TMTT",
+        ]
 
-    flat_rows = []
-
-    patient_stays = icu_stay[icu_stay["subject_id"] == subject_id].copy()
-
-    for _, stay_row in patient_stays.iterrows():
-        stay_id = stay_row["stay_id"]
-        in_time = process_time_without_year(stay_row["intime"])
-        out_time = process_time_without_year(stay_row["outtime"])
-
-        for criteria in vap_criteria:
+        flat_rows = []
+        for criteria in clabsi_criteria_stayid:
             try:
-                df = extractor.get_variable_data(
-                    variable_name=criteria,
-                    subject_id=subject_id,
-                    stay_id=stay_id,
-                    in_time=in_time,
-                    time_process_func=process_time_without_year
-                )
+                df = self._fetch_and_cache_raw_data(criteria, subject_id=subject_id, stay_id=stay_id, in_time=in_time)
             except Exception as e:
-                print(f"Lỗi khi lấy {criteria} cho stay_id={stay_id}: {e}")
+                print(f"Lỗi khi lấy {criteria} cho subject_id={subject_id}, stay_id={stay_id}: {e}")
                 continue
 
             if df.empty:
@@ -920,11 +967,9 @@ class InfectionChecker:
                 if pd.isna(charttime):
                     continue
 
-                # bỏ dữ liệu trước ICU intime
                 if charttime < in_time:
                     continue
 
-                # nếu muốn chỉ lấy trong ICU stay thì giữ dòng này
                 if pd.notna(out_time) and charttime > out_time:
                     continue
 
@@ -936,36 +981,275 @@ class InfectionChecker:
                     "day_date": day_date,
                     "criteria": criteria,
                     "charttime": charttime,
-                    "value": value
+                    "value": value,
                 })
 
-    df_patient_detail = pd.DataFrame(
-        flat_rows,
-        columns=["subject_id", "stay_id", "day_date", "criteria", "charttime", "value"]
-    )
+        for criteria in clabsi_criteria_non_stayid:
+            try:
+                df = self._fetch_and_cache_raw_data(criteria, subject_id=subject_id, out_time=out_time, in_time=in_time)
+            except Exception as e:
+                print(f"Lỗi khi lấy {criteria} cho subject_id={subject_id}")
+                continue
 
-    if df_patient_detail.empty:
-        print("Không có dữ liệu sau khi lọc.")
-    else:
-        df_patient_detail = df_patient_detail.sort_values(
-            ["stay_id", "day_date", "criteria", "charttime"]
+            if df.empty:
+                continue
+
+            for _, row in df.iterrows():
+                charttime = get_row_time(row)
+                value = get_row_value(row)
+
+                charttime = process_time_without_year(charttime)
+
+                if pd.isna(charttime):
+                    continue
+
+                if charttime < in_time:
+                    continue
+
+                if pd.notna(out_time) and charttime > out_time:
+                    continue
+
+                day_date = charttime.normalize()
+
+                flat_rows.append({
+                    "subject_id": subject_id,
+                    "stay_id": stay_id,
+                    "day_date": day_date,
+                    "criteria": criteria,
+                    "charttime": charttime,
+                    "value": value,
+                })
+
+        # =====================================================
+        # 4.2 Catheter duration criterion
+        # =====================================================
+        try:
+            catheter = self._fetch_and_cache_raw_data("Thời gian đặt catheter TMTT", subject_id=subject_id, out_time=out_time, in_time=in_time)
+        except Exception as e:
+            print(
+                f"Lỗi khi lấy Thời gian đặt catheter TMTT "
+                f"cho subject_id={subject_id}"
+            )
+            catheter = pd.DataFrame()
+
+        if not catheter.empty:
+            for _, row in catheter.iterrows():
+                starttime = row["starttime"] if "starttime" in row.index else pd.NaT
+                endtime = row["endtime"] if "endtime" in row.index else pd.NaT
+
+                starttime = process_time_without_year(starttime)
+                endtime = process_time_without_year(endtime)
+
+                if pd.isna(starttime):
+                    continue
+
+                if pd.isna(endtime):
+                    endtime = out_time
+
+                if pd.isna(endtime):
+                    continue
+
+                cath_start = max(starttime, in_time)
+
+                if pd.notna(out_time):
+                    cath_end = min(endtime, out_time)
+                else:
+                    cath_end = endtime
+
+                if cath_end < cath_start:
+                    continue
+
+                current_day = cath_start.normalize()
+                last_day = cath_end.normalize()
+
+                while current_day <= last_day:
+                    day_start = current_day
+                    day_end = current_day + pd.Timedelta(days=1)
+
+                    display_starttime = max(cath_start, day_start)
+
+                    if display_starttime < day_end and cath_end >= day_start:
+                        flat_rows.append({
+                            "subject_id": subject_id,
+                            "stay_id": stay_id,
+                            "day_date": current_day,
+                            "criteria": "Thời gian đặt catheter TMTT",
+                            "charttime": display_starttime,
+                            "value": f"starttime: {display_starttime} - endtime: {cath_end}",
+                        })
+
+                    current_day = current_day + pd.Timedelta(days=1)
+
+        df_clabsi_detail = pd.DataFrame(
+            flat_rows,
+            columns=["subject_id", "stay_id", "day_date", "criteria", "charttime", "value"],
         )
 
-        for stay_id, df_stay in df_patient_detail.groupby("stay_id"):
-            print(f"\nICU STAY: {stay_id}")
+        clabsi_json = build_infection_json(
+            df_detail=df_clabsi_detail,
+            criteria_order=criteria_order,
+        )
+        return clabsi_json
 
-            for day_date in sorted(df_stay["day_date"].unique()):
-                df_day = df_stay[df_stay["day_date"] == day_date]
-                print(f"  {pd.to_datetime(day_date).strftime('%Y-%m-%d')}:")
 
-                for criteria in vap_criteria:
-                    df_c = df_day[df_day["criteria"] == criteria].sort_values("charttime")
+    def get_cauti_features(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
+        cauti_criteria_non_stay_id = [
+            "Tiểu gấp",
+            "Tiểu nhiều lần",
+            "Tiểu buốt",
+            "Đau hông sườn",
+            "Đau/ấn đau vùng trên xương mu",
+            "Cấy nước tiểu",
+            "Bạch cầu niệu",
+            "Mủ niệu",
+            "Nitrat niệu",
+        ]
+        cauti_criteria_stay_id = ["Nhiệt độ"]
+        criteria_order = cauti_criteria_non_stay_id + cauti_criteria_stay_id + [
+            "Thời gian đặt ống thông tiểu"
+        ]
 
-                    print(f"    {criteria}:")
+        flat_rows = []
+        for criteria in cauti_criteria_non_stay_id:
+            try:
+                df = self._fetch_and_cache_raw_data(criteria, subject_id=subject_id, in_time=in_time, out_time=out_time)
+            except Exception as e:
+                print(f"Lỗi khi lấy {criteria} cho subject_id={subject_id}, stay_id={stay_id}: {e}")
+                continue
 
-                    if df_c.empty:
-                        print("      Không có dữ liệu")
-                    else:
-                        for _, r in df_c.iterrows():
-                            print(f"      {r['charttime']} - {r['value']}")
+            if df.empty:
+                continue
+
+            for _, row in df.iterrows():
+                charttime = get_row_time(row)
+                value = get_row_value(row)
+
+                charttime = process_time_without_year(charttime)
+
+                if pd.isna(charttime):
+                    continue
+
+                if charttime < in_time:
+                    continue
+
+                if pd.notna(out_time) and charttime > out_time:
+                    continue
+
+                day_date = charttime.normalize()
+
+                flat_rows.append({
+                    "subject_id": subject_id,
+                    "stay_id": stay_id,
+                    "day_date": day_date,
+                    "criteria": criteria,
+                    "charttime": charttime,
+                    "value": value,
+                })
+        
+        for criteria in cauti_criteria_stay_id:
+            try:
+                df = self._fetch_and_cache_raw_data(criteria, subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+            except Exception as e:
+                print(f"Lỗi khi lấy {criteria} cho subject_id={subject_id}, stay_id={stay_id}: {e}")
+                continue
+
+            if df.empty:
+                continue
+
+            for _, row in df.iterrows():
+                charttime = get_row_time(row)
+                value = get_row_value(row)
+
+                charttime = process_time_without_year(charttime)
+
+                if pd.isna(charttime):
+                    continue
+
+                if charttime < in_time:
+                    continue
+
+                if pd.notna(out_time) and charttime > out_time:
+                    continue
+
+                day_date = charttime.normalize()
+
+                flat_rows.append({
+                    "subject_id": subject_id,
+                    "stay_id": stay_id,
+                    "day_date": day_date,
+                    "criteria": criteria,
+                    "charttime": charttime,
+                    "value": value,
+                })
+
+        # =====================================================
+        # 4.2 Catheter duration criterion
+        # =====================================================
+        try:
+            catheter = self._fetch_and_cache_raw_data("Thời gian đặt ống thông tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        except Exception as e:
+            print(
+                f"Lỗi khi lấy Thời gian đặt ống thông tiểu "
+                f"cho subject_id={subject_id}, stay_id={stay_id}: {e}"
+            )
+            catheter = pd.DataFrame()
+
+        if not catheter.empty:
+            for _, row in catheter.iterrows():
+                starttime = row["starttime"] if "starttime" in row.index else pd.NaT
+                endtime = row["endtime"] if "endtime" in row.index else pd.NaT
+
+                starttime = process_time_without_year(starttime)
+                endtime = process_time_without_year(endtime)
+
+                if pd.isna(starttime):
+                    continue
+
+                if pd.isna(endtime):
+                    endtime = out_time
+
+                if pd.isna(endtime):
+                    continue
+
+                cath_start = max(starttime, in_time)
+
+                if pd.notna(out_time):
+                    cath_end = min(endtime, out_time)
+                else:
+                    cath_end = endtime
+
+                if cath_end < cath_start:
+                    continue
+
+                current_day = cath_start.normalize()
+                last_day = cath_end.normalize()
+
+                while current_day <= last_day:
+                    day_start = current_day
+                    day_end = current_day + pd.Timedelta(days=1)
+
+                    display_starttime = max(cath_start, day_start)
+
+                    if display_starttime < day_end and cath_end >= day_start:
+                        flat_rows.append({
+                            "subject_id": subject_id,
+                            "stay_id": stay_id,
+                            "day_date": current_day,
+                            "criteria": "Thời gian đặt ống thông tiểu",
+                            "charttime": display_starttime,
+                            "value": f"starttime: {display_starttime} - endtime: {cath_end}",
+                        })
+
+                    current_day = current_day + pd.Timedelta(days=1)
+
+        df_cauti_detail = pd.DataFrame(
+            flat_rows,
+            columns=["subject_id", "stay_id", "day_date", "criteria", "charttime", "value"],
+        )
+
+        cauti_json = build_infection_json(
+            df_detail=df_cauti_detail,
+            criteria_order=criteria_order,
+        )
+        return cauti_json
     

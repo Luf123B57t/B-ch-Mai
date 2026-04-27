@@ -1,7 +1,8 @@
 import pandas as pd
 from features_mapping import ClinicalDataExtractor
 from Rules import InfectionChecker, process_time_without_year
-from tqdm.notebook import tqdm
+from tqdm import tqdm
+import json
 
 # NROWS = 15000000
 parquet_dir = r'/home/user04/Yte_BachMai/dataset/parquet'
@@ -17,11 +18,7 @@ discharge = pd.read_parquet(f'{parquet_dir}/discharge.parquet')
 microbiologyevent = pd.read_parquet(f'{parquet_dir}/microbiologyevents.parquet')
 procedureevent = pd.read_parquet(f'{parquet_dir}/procedureevents.parquet')
 radiologyevent = pd.read_parquet(f'{parquet_dir}/radiology.parquet')
-icu_stay_raw = pd.read_parquet(f'{parquet_dir}/icustays.parquet')
-
-valid_subject_ids = chartevent['subject_id'].unique()
-icu_stay = icu_stay_raw[icu_stay_raw['subject_id'].isin(valid_subject_ids)].copy()
-print(f"\nĐã lọc icu_stay: Còn lại {len(icu_stay)}/{len(icu_stay_raw)} ca có đủ dữ liệu để đánh giá.")
+icu_stay = pd.read_parquet(f'{parquet_dir}/icustays.parquet')
 
 mimic_data = {
         "chartevents": chartevent,
@@ -31,6 +28,13 @@ mimic_data = {
         "procedureevents": procedureevent,
         "radiology": radiologyevent
 }
+
+file_paths = {
+    "VAP": "dataset_vap.jsonl",
+    "CLABSI": "dataset_clabsi.jsonl",
+    "CAUTI": "dataset_cauti.jsonl"
+}
+
 print("Khởi tạo Extractor...")
 extractor = ClinicalDataExtractor(data_tables=mimic_data)
 checker = InfectionChecker(extractor=extractor, verbose= False)
@@ -44,52 +48,59 @@ results = {
 
 detailed_results = []
 print("\nBắt đầu quét kiểm tra nhiễm trùng...")
+with open(file_paths["VAP"], "w", encoding="utf-8") as f_vap, \
+     open(file_paths["CLABSI"], "w", encoding="utf-8") as f_clabsi, \
+     open(file_paths["CAUTI"], "w", encoding="utf-8") as f_cauti:
 
-for row in tqdm(icu_stay.itertuples(), total=len(icu_stay), desc="Đang xử lý bệnh nhân"):
-    subject_id = row.subject_id
-    intime = process_time_without_year(row.intime)
-    outtime = process_time_without_year(row.outtime)
-    stay_id = row.stay_id
-    
-    # print("="*50)
-    # print("Processing patient {}....".format(subject_id))
+    for row in tqdm(icu_stay.itertuples(), total=len(icu_stay), desc="Đang xử lý bệnh nhân"):
+        subject_id = row.subject_id
+        intime = process_time_without_year(row.intime)
+        outtime = process_time_without_year(row.outtime)
+        stay_id = row.stay_id
+        
+        # print("="*50)
+        # print("Processing patient {}....".format(subject_id))
+        
+        # --- 3. Đóng gói và ghi vào 3 file khác nhau ---
+        
+        # Record cho file VAP
+        vap_record = checker.get_vap_features(subject_id=subject_id, stay_id=stay_id, in_time=intime, out_time=outtime)
+        f_vap.write(json.dumps(vap_record, ensure_ascii=False) + "\n")
+        
+        # Record cho file CLABSI
+        clabsi_record = checker.get_clabsi_features(subject_id=subject_id, stay_id=stay_id, in_time=intime, out_time=outtime)
+        f_clabsi.write(json.dumps(clabsi_record, ensure_ascii=False) + "\n")
+        
+        # Record cho file CAUTI
+        cauti_record = checker.get_cauti_features(subject_id=subject_id, stay_id=stay_id, in_time=intime, out_time=outtime)
+        f_cauti.write(json.dumps(cauti_record, ensure_ascii=False) + "\n")
 
-    vap_check = checker.check_vap_subject(subject_id=subject_id, stay_id=stay_id, in_time = intime, out_time = outtime)
-    if vap_check['final_vap']:
-        results["VAP"]["positive"] += 1
-    else:
-        results["VAP"]["negative"] += 1
+        vap_check = checker.check_vap_subject(subject_id=subject_id, stay_id=stay_id, in_time = intime, out_time = outtime)
+        if vap_check['final_vap']:
+            results["VAP"]["positive"] += 1
+        else:
+            results["VAP"]["negative"] += 1
 
-    clabsi_check = checker.check_clabsi_subject(subject_id=subject_id, stay_id=stay_id, in_time = intime, out_time = outtime)
-    if clabsi_check['final_clabsi']:
-        results["CLABSI"]["positive"] += 1
-    else:
-        results["CLABSI"]["negative"] += 1
+        clabsi_check = checker.check_clabsi_subject(subject_id=subject_id, stay_id=stay_id, in_time = intime, out_time = outtime)
+        if clabsi_check['final_clabsi']:
+            results["CLABSI"]["positive"] += 1
+        else:
+            results["CLABSI"]["negative"] += 1
 
-    cauti_check = checker.check_cauti_subject(subject_id=subject_id, stay_id=stay_id, in_time = intime, out_time = outtime)
-    if cauti_check['final_cauti']:
-        results["CAUTI"]["positive"] += 1
-    else:
-        results["CAUTI"]["negative"] += 1
-
-    print()
-
-    detailed_results.append({
-        "subject_id": subject_id,
-        "stay_id": stay_id,
-        "rule1_vap": vap_check['rule1'],
-        "rule2_vap": vap_check['rule2'],
-        "rule3_vap": vap_check['rule3'],
-        "final_vap": vap_check['final_vap'],
-        "rule1_clabsi": clabsi_check['rule1'],
-        "rule2_clabsi": clabsi_check['rule2'],
-        "final_clabsi": clabsi_check['final_clabsi'],
-        "rule1_cauti": cauti_check['rule1'],
-        "rule2_cauti": cauti_check['rule2'],
-        "final_cauti": cauti_check['final_cauti']
-    })
-    
-    checker.clear_cache()
+        cauti_check = checker.check_cauti_subject(subject_id=subject_id, stay_id=stay_id, in_time = intime, out_time = outtime)
+        if cauti_check['final_cauti']:
+            results["CAUTI"]["positive"] += 1
+        else:
+            results["CAUTI"]["negative"] += 1
+        
+        detailed_results.append({
+            "subject_id": subject_id,
+            "stay_id": stay_id,
+            "final_vap": vap_check['final_vap'],
+            "final_clabsi": clabsi_check['final_clabsi'],
+            "final_cauti": cauti_check['final_cauti']
+        })        
+        checker.clear_cache()
 
 
 print("\n--- KẾT QUẢ THỐNG KÊ ---")
