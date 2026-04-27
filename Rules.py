@@ -191,18 +191,6 @@ class InfectionChecker:
                 lung_sound_flag = True
                 first_time = min(first_time, sample.charttime)
 
-        bronchial = self.extractor.get_variable_data(
-            variable_name="Tiếng thở phế quản",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year
-        )
-        for sample in bronchial.itertuples(index=True, name="Pandas"):
-            val = str(sample.value).strip().lower()
-            if val == "bronchial":
-                lung_sound_flag = True
-                first_time = min(first_time, sample.charttime)
 
         symptom_flags = {
             "sot": sot,
@@ -219,14 +207,31 @@ class InfectionChecker:
             first_time = None
 
         return symptom_flags, symptom_count, first_time, spo2_debug
+    def extract_findings(self, text):
+        import re
+        import pandas as pd
+
+        if pd.isna(text):
+            return None
+
+        text = str(text)
+
+        pattern = r"Findings:\s*(.*?)(\n[A-Z][^\n]*:|\Z)"
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+
+        if match:
+            return match.group(1).strip()
+
+        return None
+
 
     def _get_vap_imaging_positive(
-    self,
-    subject_id: int,
-    stay_id: int,
-    in_time: pd.Timestamp,
-    out_time: pd.Timestamp
-):
+        self,
+        subject_id: int,
+        stay_id: int,
+        in_time: pd.Timestamp,
+        out_time: pd.Timestamp
+    ):
         """
         Kiểm tra imaging gợi ý viêm phổi từ:
         - X-quang ngực
@@ -246,16 +251,6 @@ class InfectionChecker:
         xray = self.extractor.get_variable_data(
             variable_name="X-quang ngực",
             subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year,
-            out_time=out_time
-        )
-
-        ct = self.extractor.get_variable_data(
-            variable_name="CT scan lồng ngực",
-            subject_id=subject_id,
-            stay_id=stay_id,
             in_time=in_time,
             time_process_func=process_time_without_year,
             out_time=out_time
@@ -266,19 +261,24 @@ class InfectionChecker:
 
         text_list = []
 
-        for df_img in [xray, ct]:
+        for df_img in [xray]:
             if df_img.empty:
                 continue
+
             if "text" not in df_img.columns:
                 continue
 
             for sample in df_img.itertuples(index=True, name="Pandas"):
-                text = str(sample.text).strip().lower()
+                text = self.extract_findings(sample.text)
+
+                if text:
+                    text = text.strip().lower()
+
                 if text and text != "nan":
                     text_list.append(text)
 
         if len(text_list) == 0:
-            return False
+            return None
 
         self.model.eval()
 
@@ -310,8 +310,6 @@ class InfectionChecker:
             imaging_positive = True
 
         return imaging_positive
-
-
     def _get_vap_micro_positive(self, subject_id: int, stay_id: int, in_time):
         """
         Rule microbiology:
@@ -407,7 +405,7 @@ class InfectionChecker:
 
         vap_rule1 = (
             symptom_count >= 2 and
-            imaging_positive and
+            imaging_positive is True and
             micro_positive and
             ventilation_ok
         )
@@ -481,7 +479,7 @@ class InfectionChecker:
 
         vap_rule3 = (
             symptom_count >= 2 and
-            imaging_positive and
+            imaging_positive is True and
             ventilation_ok
         )
 
@@ -491,27 +489,72 @@ class InfectionChecker:
     # HÀM TỔNG HỢP
     # =========================================================
     def check_vap_subject(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
-        """
-        Trả về dict tổng hợp cả 3 rule
-        """
-        r1 = self.check_vap_rule1(subject_id, stay_id, in_time = in_time, out_time = out_time)
-        r2 = self.check_vap_rule2(subject_id, stay_id, in_time = in_time, out_time = out_time)
-        r3 = self.check_vap_rule3(subject_id, stay_id, in_time = in_time, out_time = out_time)
+        symptom_flags, symptom_count, first_time, spo2_debug = self._get_vap_symptoms(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time
+        )
+
+        imaging_positive = self._get_vap_imaging_positive(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time,
+            out_time=out_time
+        )
+
+        micro_positive = self._get_vap_micro_positive(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time
+        )
+
+        ventilation_ok = self._check_ventilation_before_first_time(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time,
+            first_time=first_time
+        )
+
+        rule1_criteria = {
+            "symptom_count >= 2": symptom_count >= 2,
+            "imaging_positive": imaging_positive is True,
+            "micro_positive": micro_positive,
+            "ventilation_ok": ventilation_ok,
+        }
+
+        rule2_criteria = {
+            "symptom_count >= 3": symptom_count >= 3,
+            "ventilation_ok": ventilation_ok,
+        }
+
+        rule3_criteria = {
+            "symptom_count >= 2": symptom_count >= 2,
+            "imaging_positive": imaging_positive is True,
+            "ventilation_ok": ventilation_ok,
+        }
+
+        r1 = all(rule1_criteria.values())
+        r2 = all(rule2_criteria.values())
+        r3 = all(rule3_criteria.values())
 
         final_vap = r1 or r2 or r3
-
-        if self.verbose:
-            print("\n===== FINAL VAP =====")
-            print("rule1:", r1)
-            print("rule2:", r2)
-            print("rule3:", r3)
-            print("=> FINAL VAP:", final_vap)
 
         return {
             "rule1": r1,
             "rule2": r2,
             "rule3": r3,
-            "final_vap": final_vap
+            "final_vap": final_vap,
+            "criteria": {
+                "symptom_flags": symptom_flags,
+                "symptom_count": symptom_count,
+                "first_time": first_time,
+                "imaging_positive": imaging_positive,
+                "micro_positive": micro_positive,
+                "ventilation_ok": ventilation_ok,
+                "rule1_criteria": rule1_criteria,
+                "rule2_criteria": rule2_criteria,
+                "rule3_criteria": rule3_criteria,
+            }
         }
 
     def check_clabsi_subject(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):

@@ -103,9 +103,8 @@ class ClinicalDataExtractor:
             MappingRule("Đau/ấn đau vùng trên xương mu", "discharge", lookup_operator="keyword_search", value_column="text", time_column="charttime", note_id_column="note_id"),
 
             # ===== RADIOLOGY =====
-            # hadm_id_column set thành None vì trong code gốc bạn ghi rõ "hadm_id_column": None
-            MappingRule("X-quang ngực","radiology",lookup_column="note_type",lookup_value="Radiology",value_column="text",time_column="charttime",note_id_column="note_id"),
-            MappingRule("CT scan lồng ngực","radiology",lookup_column="note_type",lookup_value="Radiology",value_column="text",time_column="charttime",note_id_column="note_id"),
+            MappingRule("X-quang ngực","radiology",value_column="note_type",time_column="charttime",note_id_column="note_id"),
+            
         ]
         
         # Chuyển đổi thành DataFrame và loại bỏ trùng lặp
@@ -175,9 +174,9 @@ class ClinicalDataExtractor:
                         # Sử dụng .between để lọc trong khoảng [in_time, outtime]
                         df = df[df[time_col].between(in_time, out_time)]
                     
-                    if check_48h and in_time is not None: 
-                        min_time_allowed = in_time + pd.Timedelta(hours=48)
-                        df = df[df[time_col] >= min_time_allowed]
+                    # if check_48h and in_time is not None: 
+                    #     min_time_allowed = in_time + pd.Timedelta(hours=48)
+                    #     df = df[df[time_col] >= min_time_allowed]
                     
 
             # Copy để gán meta-data mà không ảnh hưởng DataFrame gốc
