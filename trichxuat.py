@@ -32,8 +32,28 @@ checker = InfectionChecker(extractor=extractor, verbose=False)
 
 
 # =====================================================
-# 2. CLABSI criteria
+# 2. Criteria
 # =====================================================
+vap_criteria = [
+    "Nhiệt độ",
+    "Ho",
+    "Đờm mủ",
+    "Nhịp thở",
+    "SpO2",
+    "Cần hỗ trợ oxy",
+    "FiO2",
+    "Rale",
+    "Tiếng thở phế quản",
+    "Cấy dịch đường hô hấp",
+    "Cấy máu",
+]
+
+vap_criteria_order = vap_criteria + [
+    "Thở máy",
+    "Imaging VAP (X-quang/CT)",
+]
+
+
 clabsi_criteria = [
     "Nhiệt độ",
     "Ớn lạnh",
@@ -41,7 +61,7 @@ clabsi_criteria = [
     "Cấy máu",
 ]
 
-criteria_order = clabsi_criteria + [
+clabsi_criteria_order = clabsi_criteria + [
     "Thời gian đặt catheter TMTT",
 ]
 
@@ -88,145 +108,6 @@ def safe_json_value(v):
     return v
 
 
-# =====================================================
-# 4. Extract CLABSI detail for all ICU stays
-# =====================================================
-flat_rows = []
-
-for _, stay_row in icu_stay.iterrows():
-    subject_id = stay_row["subject_id"]
-    stay_id = stay_row["stay_id"]
-
-    in_time = process_time_without_year(stay_row["intime"])
-    out_time = process_time_without_year(stay_row["outtime"])
-
-    if pd.isna(in_time):
-        continue
-
-    # =====================================================
-    # 4.1 Normal CLABSI criteria
-    # =====================================================
-    for criteria in clabsi_criteria:
-        try:
-            df = extractor.get_variable_data(
-                variable_name=criteria,
-                subject_id=subject_id,
-                stay_id=stay_id,
-                in_time=in_time,
-                time_process_func=process_time_without_year,
-            )
-        except Exception as e:
-            print(f"Lỗi khi lấy {criteria} cho subject_id={subject_id}, stay_id={stay_id}: {e}")
-            continue
-
-        if df.empty:
-            continue
-
-        for _, row in df.iterrows():
-            charttime = get_row_time(row)
-            value = get_row_value(row)
-
-            charttime = process_time_without_year(charttime)
-
-            if pd.isna(charttime):
-                continue
-
-            if charttime < in_time:
-                continue
-
-            if pd.notna(out_time) and charttime > out_time:
-                continue
-
-            day_date = charttime.normalize()
-
-            flat_rows.append({
-                "subject_id": subject_id,
-                "stay_id": stay_id,
-                "day_date": day_date,
-                "criteria": criteria,
-                "charttime": charttime,
-                "value": value,
-            })
-
-    # =====================================================
-    # 4.2 Catheter duration criterion
-    # =====================================================
-    try:
-        catheter = extractor.get_variable_data(
-            variable_name="Thời gian đặt catheter TMTT",
-            subject_id=subject_id,
-            stay_id=stay_id,
-            in_time=in_time,
-            time_process_func=process_time_without_year,
-        )
-    except Exception as e:
-        print(
-            f"Lỗi khi lấy Thời gian đặt catheter TMTT "
-            f"cho subject_id={subject_id}, stay_id={stay_id}: {e}"
-        )
-        catheter = pd.DataFrame()
-
-    if not catheter.empty:
-        for _, row in catheter.iterrows():
-            starttime = row["starttime"] if "starttime" in row.index else pd.NaT
-            endtime = row["endtime"] if "endtime" in row.index else pd.NaT
-
-            starttime = process_time_without_year(starttime)
-            endtime = process_time_without_year(endtime)
-
-            if pd.isna(starttime):
-                continue
-
-            if pd.isna(endtime):
-                endtime = out_time
-
-            if pd.isna(endtime):
-                continue
-
-            cath_start = max(starttime, in_time)
-
-            if pd.notna(out_time):
-                cath_end = min(endtime, out_time)
-            else:
-                cath_end = endtime
-
-            if cath_end < cath_start:
-                continue
-
-            current_day = cath_start.normalize()
-            last_day = cath_end.normalize()
-
-            while current_day <= last_day:
-                day_start = current_day
-                day_end = current_day + pd.Timedelta(days=1)
-
-                display_starttime = max(cath_start, day_start)
-
-                if display_starttime < day_end and cath_end >= day_start:
-                    flat_rows.append({
-                        "subject_id": subject_id,
-                        "stay_id": stay_id,
-                        "day_date": current_day,
-                        "criteria": "Thời gian đặt catheter TMTT",
-                        "charttime": display_starttime,
-                        "value": f"starttime: {display_starttime} - endtime: {cath_end}",
-                    })
-
-                current_day = current_day + pd.Timedelta(days=1)
-
-
-# =====================================================
-# 5. Create dataframe
-# =====================================================
-df_clabsi_detail = pd.DataFrame(
-    flat_rows,
-    columns=["subject_id", "stay_id", "day_date", "criteria", "charttime", "value"],
-)
-
-
-# =====================================================
-# 6. Convert dataframe to nested JSON structure
-# =====================================================
 def build_infection_json(df_detail, criteria_order):
     all_subjects = []
 
@@ -277,19 +158,287 @@ def build_infection_json(df_detail, criteria_order):
     return all_subjects
 
 
-clabsi_json = build_infection_json(
-    df_detail=df_clabsi_detail,
-    criteria_order=criteria_order,
+# =====================================================
+# 4. Extract VAP + CLABSI for all ICU stays
+# =====================================================
+vap_flat_rows = []
+clabsi_flat_rows = []
+
+for idx, stay_row in icu_stay.iterrows():
+    subject_id = stay_row["subject_id"]
+    stay_id = stay_row["stay_id"]
+
+    in_time = process_time_without_year(stay_row["intime"])
+    out_time = process_time_without_year(stay_row["outtime"])
+
+    if pd.isna(in_time):
+        continue
+
+    print(f"Processing {idx + 1}/{len(icu_stay)} | subject_id={subject_id}, stay_id={stay_id}")
+
+    # =====================================================
+    # 4.1 VAP normal criteria
+    # =====================================================
+    for criteria in vap_criteria:
+        try:
+            df = extractor.get_variable_data(
+                variable_name=criteria,
+                subject_id=subject_id,
+                stay_id=stay_id,
+                in_time=in_time,
+                time_process_func=process_time_without_year,
+            )
+        except Exception as e:
+            print(f"Lỗi VAP {criteria} | subject_id={subject_id}, stay_id={stay_id}: {e}")
+            continue
+
+        if df.empty:
+            continue
+
+        for _, row in df.iterrows():
+            charttime = process_time_without_year(get_row_time(row))
+            value = get_row_value(row)
+
+            if pd.isna(charttime):
+                continue
+
+            if charttime < in_time:
+                continue
+
+            if pd.notna(out_time) and charttime > out_time:
+                continue
+
+            vap_flat_rows.append({
+                "subject_id": subject_id,
+                "stay_id": stay_id,
+                "day_date": charttime.normalize(),
+                "criteria": criteria,
+                "charttime": charttime,
+                "value": value,
+            })
+
+    # =====================================================
+    # 4.2 VAP mechanical ventilation
+    # =====================================================
+    try:
+        tho_may = extractor.get_variable_data(
+            variable_name="Thời gian thở máy",
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time,
+            time_process_func=process_time_without_year,
+        )
+    except Exception as e:
+        print(f"Lỗi Thời gian thở máy | subject_id={subject_id}, stay_id={stay_id}: {e}")
+        tho_may = pd.DataFrame()
+
+    if not tho_may.empty:
+        for _, row in tho_may.iterrows():
+            starttime = process_time_without_year(row["starttime"]) if "starttime" in row.index else pd.NaT
+            endtime = process_time_without_year(row["endtime"]) if "endtime" in row.index else pd.NaT
+
+            if pd.isna(starttime):
+                continue
+
+            if pd.isna(endtime):
+                endtime = out_time
+
+            if pd.isna(endtime):
+                continue
+
+            vent_start = max(starttime, in_time)
+            vent_end = min(endtime, out_time) if pd.notna(out_time) else endtime
+
+            if vent_end < vent_start:
+                continue
+
+            current_day = vent_start.normalize()
+            last_day = vent_end.normalize()
+
+            while current_day <= last_day:
+                day_start = current_day
+                day_end = current_day + pd.Timedelta(days=1)
+
+                display_starttime = max(vent_start, day_start)
+
+                if display_starttime < day_end and vent_end >= day_start:
+                    vap_flat_rows.append({
+                        "subject_id": subject_id,
+                        "stay_id": stay_id,
+                        "day_date": current_day,
+                        "criteria": "Thở máy",
+                        "charttime": display_starttime,
+                        "value": f"starttime: {display_starttime} - endtime: {vent_end}",
+                    })
+
+                current_day += pd.Timedelta(days=1)
+
+    # =====================================================
+    # 4.3 VAP imaging
+    # =====================================================
+    try:
+        imaging_positive = checker._get_vap_imaging_positive(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time,
+            out_time=out_time,
+        )
+    except TypeError:
+        imaging_positive = checker._get_vap_imaging_positive(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time,
+        )
+    except Exception as e:
+        print(f"Lỗi Imaging VAP | subject_id={subject_id}, stay_id={stay_id}: {e}")
+        imaging_positive = None
+
+    vap_flat_rows.append({
+        "subject_id": subject_id,
+        "stay_id": stay_id,
+        "day_date": in_time.normalize(),
+        "criteria": "Imaging VAP (X-quang/CT)",
+        "charttime": in_time,
+        "value": imaging_positive,
+    })
+
+    # =====================================================
+    # 4.4 CLABSI normal criteria
+    # =====================================================
+    for criteria in clabsi_criteria:
+        try:
+            df = extractor.get_variable_data(
+                variable_name=criteria,
+                subject_id=subject_id,
+                stay_id=stay_id,
+                in_time=in_time,
+                time_process_func=process_time_without_year,
+            )
+        except Exception as e:
+            print(f"Lỗi CLABSI {criteria} | subject_id={subject_id}, stay_id={stay_id}: {e}")
+            continue
+
+        if df.empty:
+            continue
+
+        for _, row in df.iterrows():
+            charttime = process_time_without_year(get_row_time(row))
+            value = get_row_value(row)
+
+            if pd.isna(charttime):
+                continue
+
+            if charttime < in_time:
+                continue
+
+            if pd.notna(out_time) and charttime > out_time:
+                continue
+
+            clabsi_flat_rows.append({
+                "subject_id": subject_id,
+                "stay_id": stay_id,
+                "day_date": charttime.normalize(),
+                "criteria": criteria,
+                "charttime": charttime,
+                "value": value,
+            })
+
+    # =====================================================
+    # 4.5 CLABSI catheter duration
+    # =====================================================
+    try:
+        catheter = extractor.get_variable_data(
+            variable_name="Thời gian đặt catheter TMTT",
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time,
+            time_process_func=process_time_without_year,
+        )
+    except Exception as e:
+        print(f"Lỗi Thời gian đặt catheter TMTT | subject_id={subject_id}, stay_id={stay_id}: {e}")
+        catheter = pd.DataFrame()
+
+    if not catheter.empty:
+        for _, row in catheter.iterrows():
+            starttime = process_time_without_year(row["starttime"]) if "starttime" in row.index else pd.NaT
+            endtime = process_time_without_year(row["endtime"]) if "endtime" in row.index else pd.NaT
+
+            if pd.isna(starttime):
+                continue
+
+            if pd.isna(endtime):
+                endtime = out_time
+
+            if pd.isna(endtime):
+                continue
+
+            cath_start = max(starttime, in_time)
+            cath_end = min(endtime, out_time) if pd.notna(out_time) else endtime
+
+            if cath_end < cath_start:
+                continue
+
+            current_day = cath_start.normalize()
+            last_day = cath_end.normalize()
+
+            while current_day <= last_day:
+                day_start = current_day
+                day_end = current_day + pd.Timedelta(days=1)
+
+                display_starttime = max(cath_start, day_start)
+
+                if display_starttime < day_end and cath_end >= day_start:
+                    clabsi_flat_rows.append({
+                        "subject_id": subject_id,
+                        "stay_id": stay_id,
+                        "day_date": current_day,
+                        "criteria": "Thời gian đặt catheter TMTT",
+                        "charttime": display_starttime,
+                        "value": f"starttime: {display_starttime} - endtime: {cath_end}",
+                    })
+
+                current_day += pd.Timedelta(days=1)
+
+
+# =====================================================
+# 5. Build DataFrames
+# =====================================================
+df_vap_detail = pd.DataFrame(
+    vap_flat_rows,
+    columns=["subject_id", "stay_id", "day_date", "criteria", "charttime", "value"],
+)
+
+df_clabsi_detail = pd.DataFrame(
+    clabsi_flat_rows,
+    columns=["subject_id", "stay_id", "day_date", "criteria", "charttime", "value"],
 )
 
 
 # =====================================================
-# 7. Save to one JSON file
+# 6. Convert to nested JSON
 # =====================================================
-output_path = "clabsi_json.json"
+vap_json = build_infection_json(
+    df_detail=df_vap_detail,
+    criteria_order=vap_criteria_order,
+)
 
-with open(output_path, "w", encoding="utf-8") as f:
+clabsi_json = build_infection_json(
+    df_detail=df_clabsi_detail,
+    criteria_order=clabsi_criteria_order,
+)
+
+
+# =====================================================
+# 7. Save JSON files
+# =====================================================
+with open("vap_json.json", "w", encoding="utf-8") as f:
+    json.dump(vap_json, f, ensure_ascii=False, indent=2)
+
+with open("clabsi_json.json", "w", encoding="utf-8") as f:
     json.dump(clabsi_json, f, ensure_ascii=False, indent=2)
 
-print(f"Đã lưu CLABSI JSON vào: {output_path}")
-print(f"Số subject có dữ liệu: {len(clabsi_json)}")
+
+print("Đã lưu VAP JSON vào: vap_json.json")
+print("Đã lưu CLABSI JSON vào: clabsi_json.json")
+print(f"Số subject có dữ liệu VAP: {len(vap_json)}")
+print(f"Số subject có dữ liệu CLABSI: {len(clabsi_json)}")
