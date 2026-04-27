@@ -48,35 +48,95 @@ class InfectionChecker:
     def clear_cache(self):
         self._data_cache = {}
 
-    def _get_cached_data(self, variable_name, subject_id, stay_id=None, in_time=None, out_time=None, check_48h=None):
+    # def get_data_with_48h_rule(self, variable_name, subject_id, stay_id=None, in_time=None, out_time=None, check_48h=False):
+    #     """
+    #     Hàm Wrapper để lấy dữ liệu. Tự động lưu cache để dùng lại nếu gọi trùng tham số.
+    #     """
+    #     if subject_id is None or in_time is None:
+    #         raise ValueError(f"Lỗi [{variable_name}]: Bắt buộc phải truyền subject_id và in_time.")
+        
+    #     if stay_id is None and out_time is None:
+    #         raise ValueError(f"Lỗi [{variable_name}]: Nếu không có stay_id thì bắt buộc phải truyền out_time.")
+        
+    #     # Tạo một tuple khóa (key) đại diện cho lời gọi này
+    #     cache_key = (variable_name, subject_id, stay_id, in_time, out_time, check_48h)
+        
+    #     if cache_key not in self._data_cache:
+    #         # Tạo dictionary các tham số hợp lệ để truyền vào extractor
+    #         kwargs = {
+    #             'variable_name': variable_name,
+    #             'subject_id': subject_id,
+    #             'time_process_func': process_time_without_year
+    #         }
+    #         if stay_id is not None: kwargs['stay_id'] = stay_id
+    #         if in_time is not None: kwargs['in_time'] = in_time
+    #         if out_time is not None: kwargs['out_time'] = out_time
+    #         if check_48h is not None: kwargs['check_48h'] = check_48h
+
+    #         self._data_cache[cache_key] = self.extractor.get_variable_data(**kwargs)
+            
+    #     # Luôn trả về copy() để các hàm xử lý xóa/sửa cột không làm hỏng cache
+    #     return self._data_cache[cache_key].copy()
+    def _fetch_and_cache_raw_data(self, variable_name, subject_id, stay_id=None, in_time=None, out_time=None):
         """
-        Hàm Wrapper để lấy dữ liệu. Tự động lưu cache để dùng lại nếu gọi trùng tham số.
+        HÀM 1: Chỉ lấy dữ liệu gốc và đưa vào Cache. Không xử lý luật y khoa.
         """
         if subject_id is None or in_time is None:
             raise ValueError(f"Lỗi [{variable_name}]: Bắt buộc phải truyền subject_id và in_time.")
         
         if stay_id is None and out_time is None:
-            raise ValueError(f"Lỗi [{variable_name}]: Nếu không có stay_id thì bắt buộc phải truyền out_time.")
+            raise ValueError(f"Lỗi [{variable_name}]: Bắt buộc truyền stay_id hoặc out_time.")
         
-        # Tạo một tuple khóa (key) đại diện cho lời gọi này
-        cache_key = (variable_name, subject_id, stay_id, in_time, out_time, check_48h)
+        cache_key = (variable_name, subject_id, stay_id, in_time, out_time)
         
         if cache_key not in self._data_cache:
-            # Tạo dictionary các tham số hợp lệ để truyền vào extractor
             kwargs = {
                 'variable_name': variable_name,
                 'subject_id': subject_id,
-                'time_process_func': process_time_without_year
+                'time_process_func': process_time_without_year 
             }
             if stay_id is not None: kwargs['stay_id'] = stay_id
             if in_time is not None: kwargs['in_time'] = in_time
             if out_time is not None: kwargs['out_time'] = out_time
-            if check_48h is not None: kwargs['check_48h'] = check_48h
+            # if check_48h is not None: kwargs['check_48h'] = check_48h
 
+           
             self._data_cache[cache_key] = self.extractor.get_variable_data(**kwargs)
             
-        # Luôn trả về copy() để các hàm xử lý xóa/sửa cột không làm hỏng cache
         return self._data_cache[cache_key].copy()
+
+
+    def get_data_with_48h_rule(self, variable_name, subject_id, vent_start_time, stay_id=None, in_time=None, out_time=None):
+        """
+        HÀM 2: Lấy data trực tiếp từ Cache (không fetch mới) và lọc bỏ các sự kiện < 48h.
+        Phục vụ trực tiếp cho quá trình Label (VAP, CLABSI...).
+        """
+        cache_key = (variable_name, subject_id, stay_id, in_time, out_time)
+        
+        if cache_key not in self._data_cache:
+            # Tùy bạn quyết định: raise Exception hoặc return None nếu quên chưa tạo cache
+            raise KeyError(f"Dữ liệu cho {variable_name} chưa có trong cache. Phải gọi hàm tạo cache trước!")
+            
+        df = self._data_cache[cache_key]
+
+        if df is None or df.empty:
+            return df
+        
+        vent_start_time = pd.to_datetime(vent_start_time)
+        
+        # 3. Linh hoạt tên cột thời gian (chartevent hoặc charttime)
+        time_col = 'charttime'
+        
+        if time_col not in df.columns:
+            raise KeyError(f"Dữ liệu của {variable_name} không có cột '{time_col}' để tính khoảng cách 48h.")
+            
+        # df[time_col] = pd.to_datetime(df[time_col])
+        
+        # Lọc trực tiếp: khoảng cách từ in_time đến charttime >= 48 giờ
+        df_filtered = df[(df[time_col] - in_time).dt.total_seconds() / 3600.0 >= 48.0].copy()
+        
+                
+        return df_filtered
 
     def _check_spo2_worsening(self, subject_id, stay_id, in_time:pd.Timestamp):
         """
@@ -91,7 +151,7 @@ class InfectionChecker:
         - spo2_df: bảng debug
         """
 
-        spo2 = self._get_cached_data(
+        spo2 = self.get_data_with_48h_rule(
             variable_name="SpO2",
             subject_id=subject_id,
             stay_id=stay_id,
@@ -144,7 +204,7 @@ class InfectionChecker:
 
         # -------- Sốt --------
         sot = False
-        nhiet_do = self._get_cached_data("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        nhiet_do = self.get_data_with_48h_rule("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         if not nhiet_do.empty:
             mask = ((nhiet_do['itemid'] == 223761) & (nhiet_do['valuenum'] > 100.4)) | \
                    ((nhiet_do['itemid'] == 223762) & (nhiet_do['valuenum'] > 38))
@@ -154,7 +214,7 @@ class InfectionChecker:
                 first_time = min(first_time, df_sot['charttime'].min())
 
         # -------- Ho --------
-        ho = self._get_cached_data("Ho", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        ho = self.get_data_with_48h_rule("Ho", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in ho.itertuples(index=True, name="Pandas"):
             val = str(sample.value).strip().lower()
             if sample.itemid == 223991 and val in ["weak", "strong"]:
@@ -162,7 +222,7 @@ class InfectionChecker:
                 first_time = min(first_time, sample.charttime)
 
         # -------- Đờm mủ --------
-        dom_mu = self._get_cached_data("Đờm mủ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        dom_mu = self.get_data_with_48h_rule("Đờm mủ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in dom_mu.itertuples(index=True, name="Pandas"):
             val = str(sample.value).strip().lower()
             if val != "clear":
@@ -170,7 +230,7 @@ class InfectionChecker:
                 first_time = min(first_time, sample.charttime)
 
         # -------- Thở nhanh --------
-        nhip_tho = self._get_cached_data("Nhịp thở", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        nhip_tho = self.get_data_with_48h_rule("Nhịp thở", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in nhip_tho.itertuples(index=True, name="Pandas"):
             if pd.notna(sample.valuenum) and sample.valuenum > 20:
                 tho_nhanh_flag = True
@@ -194,14 +254,14 @@ class InfectionChecker:
             "rhonchi", "tubular"
         }
 
-        rale = self._get_cached_data("Rale", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        rale = self.get_data_with_48h_rule("Rale", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in rale.itertuples(index=True, name="Pandas"):
             val = str(sample.value).strip().lower()
             if val in lung_keywords:
                 lung_sound_flag = True
                 first_time = min(first_time, sample.charttime)
 
-        # bronchial = self._get_cached_data("Tiếng thở phế quản", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        # bronchial = self.get_data_with_48h_rule("Tiếng thở phế quản", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         # for sample in bronchial.itertuples(index=True, name="Pandas"):
         #     val = str(sample.value).strip().lower()
         #     if val == "bronchial":
@@ -245,8 +305,8 @@ class InfectionChecker:
 
         imaging_positive = False
 
-        xray = self._get_cached_data("X-quang ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
-        ct = self._get_cached_data("CT scan lồng ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        xray = self.get_data_with_48h_rule("X-quang ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        ct = self.get_data_with_48h_rule("CT scan lồng ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
 
         THRESHOLD = 0.35
         MAX_LENGTH = 256
@@ -308,14 +368,14 @@ class InfectionChecker:
         """
         micro_positive = False
 
-        cay_dich = self._get_cached_data("Cấy dịch đường hô hấp", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        cay_dich = self.get_data_with_48h_rule("Cấy dịch đường hô hấp", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in cay_dich.itertuples(index=True, name="Pandas"):
             if pd.notna(sample.org_name):
                 micro_positive = True
                 break
 
         if not micro_positive:
-            cay_mau = self._get_cached_data("Cấy máu", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+            cay_mau = self.get_data_with_48h_rule("Cấy máu", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
             for sample in cay_mau.itertuples(index=True, name="Pandas"):
                 if pd.notna(sample.org_name):
                     micro_positive = True
@@ -330,7 +390,7 @@ class InfectionChecker:
         if first_time is None:
             return False
 
-        tho_may = self._get_cached_data("Thời gian thở máy", subject_id=subject_id, stay_id=stay_id, in_time=in_time, check_48h=False)
+        tho_may = self._fetch_and_cache_raw_data("Thời gian thở máy", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in tho_may.itertuples(index=True, name="Pandas"):
             if pd.notna(sample.starttime):
                 if first_time - sample.starttime >= pd.Timedelta(days=2):
@@ -501,7 +561,7 @@ class InfectionChecker:
 
         # Cấy máu dương tính với tác nhân gây bệnh
         cay_mau_duong_tinh = False
-        cay_mau = self._get_cached_data("Cấy máu", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        cay_mau = self.get_data_with_48h_rule("Cấy máu", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         for sample in cay_mau.itertuples(index=True, name='Pandas'):
             if sample.spec_type_desc == "BLOOD CULTURE" and pd.notna(sample.org_name) and sample.org_name.upper() not in skin_contaminants:
                 cay_mau_duong_tinh = True
@@ -509,7 +569,7 @@ class InfectionChecker:
         
         # Thời gian đặt catheter TMTT
         thoi_gian_dat_catheter = False
-        catheter = self._get_cached_data("Thời gian đặt catheter TMTT", subject_id=subject_id, out_time=out_time, in_time=in_time, check_48h=False)
+        catheter = self._fetch_and_cache_raw_data("Thời gian đặt catheter TMTT", subject_id=subject_id, out_time=out_time, in_time=in_time)
         for sample in catheter.itertuples(index=True, name='Pandas'):
             if first_time1 != FAR_FUTURE and first_time1 - sample.starttime >= pd.Timedelta(days=2):
                 thoi_gian_dat_catheter = True
@@ -521,7 +581,7 @@ class InfectionChecker:
 
         # Sot
         sot = False
-        nhiet_do = self._get_cached_data("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        nhiet_do = self.get_data_with_48h_rule("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         if not nhiet_do.empty:
             mask = ((nhiet_do['itemid'] == 223761) & (nhiet_do['valuenum'] > 100.4)) | \
                    ((nhiet_do['itemid'] == 223762) & (nhiet_do['valuenum'] > 38))
@@ -532,7 +592,7 @@ class InfectionChecker:
                 
         # On lanh
         onlanh = False
-        on_lanh = self._get_cached_data("Ớn lạnh", subject_id=subject_id, out_time=out_time, in_time=in_time)
+        on_lanh = self.get_data_with_48h_rule("Ớn lạnh", subject_id=subject_id, out_time=out_time, in_time=in_time)
         if not on_lanh.empty:
             onlanh = True
             min_charttime = on_lanh['charttime'].min()
@@ -540,7 +600,7 @@ class InfectionChecker:
         
         # Huyết áp thấp
         huyet_ap_thap = False
-        huyet_ap = self._get_cached_data("Huyết áp tâm thu", subject_id=subject_id, stay_id = stay_id, in_time=in_time)
+        huyet_ap = self.get_data_with_48h_rule("Huyết áp tâm thu", subject_id=subject_id, stay_id = stay_id, in_time=in_time)
         if not huyet_ap.empty and 'valuenum' in huyet_ap.columns:
             df_huyet_ap_thap = huyet_ap[huyet_ap['valuenum'] <= 90]
 
@@ -613,7 +673,7 @@ class InfectionChecker:
         # =========== RULE 1 ===========
         # Sốt
         sot = False
-        nhiet_do = self._get_cached_data("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        nhiet_do = self.get_data_with_48h_rule("Nhiệt độ", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
         if not nhiet_do.empty:
             mask = ((nhiet_do['itemid'] == 223761) & (nhiet_do['valuenum'] > 100.4)) | \
                    ((nhiet_do['itemid'] == 223762) & (nhiet_do['valuenum'] > 38))
@@ -624,35 +684,35 @@ class InfectionChecker:
 
         # Tiểu gấp
         tieugap = False
-        tieu_gap = self._get_cached_data("Tiểu gấp", subject_id=subject_id, out_time=out_time, in_time=in_time)
+        tieu_gap = self.get_data_with_48h_rule("Tiểu gấp", subject_id=subject_id, out_time=out_time, in_time=in_time)
         if not tieu_gap.empty:
             tieugap = True
             first_time1 = min(first_time1, tieu_gap['charttime'].min())
 
         # Tiểu nhiều
         tieunhieu = False
-        tieu_nhieu = self._get_cached_data("Tiểu nhiều lần", subject_id=subject_id, out_time=out_time, in_time=in_time)
+        tieu_nhieu = self.get_data_with_48h_rule("Tiểu nhiều lần", subject_id=subject_id, out_time=out_time, in_time=in_time)
         if not tieu_nhieu.empty:
             tieunhieu = True
             first_time1 = min(first_time1, tieu_nhieu['charttime'].min())
                 
         # Tiểu buốt
         tieubuot = False
-        tieu_buot = self._get_cached_data("Tiểu buốt", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        tieu_buot = self.get_data_with_48h_rule("Tiểu buốt", subject_id=subject_id, in_time=in_time, out_time=out_time)
         if not tieu_buot.empty:
             tieubuot = True
             first_time1 = min(first_time1, tieu_buot['charttime'].min())
         
         # Đau hông sườn
         dauhongsuon = False
-        dau_hong_suon = self._get_cached_data("Đau hông sườn", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        dau_hong_suon = self.get_data_with_48h_rule("Đau hông sườn", subject_id=subject_id, in_time=in_time, out_time=out_time)
         if not dau_hong_suon.empty:
             dauhongsuon = True
             first_time1 = min(first_time1, dau_hong_suon['charttime'].min())
 
         # Đau xương mu
         dauxuongmu = False
-        dau_xuong_mu = self._get_cached_data("Đau/ấn đau vùng trên xương mu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        dau_xuong_mu = self.get_data_with_48h_rule("Đau/ấn đau vùng trên xương mu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         if not dau_xuong_mu.empty:
             dauxuongmu = True
             first_time1 = min(first_time1, dau_xuong_mu['charttime'].min())
@@ -663,7 +723,7 @@ class InfectionChecker:
 
         # Cay nuoc tieu
         cay_nuoc_tieu_duong_tinh = False
-        cay_nuoc_tieu = self._get_cached_data("Cấy nước tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        cay_nuoc_tieu = self.get_data_with_48h_rule("Cấy nước tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         
         if not cay_nuoc_tieu.empty and 'charttime' in cay_nuoc_tieu.columns and 'quantity' in cay_nuoc_tieu.columns:
             # Điều kiện 1: quantity > 100,000 và 10^4-10^5
@@ -683,7 +743,7 @@ class InfectionChecker:
                 first_time1 = min(first_time1, df_cay_valid['charttime'].min())
             
         thoi_gian_dat_ong_thong_tieu = False
-        ong_thong_tieu = self._get_cached_data("Thời gian đặt ống thông tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time, check_48h=False)
+        ong_thong_tieu = self._fetch_and_cache_raw_data("Thời gian đặt ống thông tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         
         if first_time1 != FAR_FUTURE and not ong_thong_tieu.empty and 'starttime' in ong_thong_tieu.columns:
             # Tạo mặt nạ kiểm tra: Thời gian đầu tiên xuất hiện triệu chứng - thời gian bắt đầu đặt >= 2 ngày
@@ -709,7 +769,7 @@ class InfectionChecker:
         
         # Cấy nước tiểu (Tối ưu bằng .duplicated thay vì vòng lặp set)
         cay_nuoc_tieu_duong_tinh = False
-        cay_nuoc_tieu = self._get_cached_data("Cấy nước tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        cay_nuoc_tieu = self.get_data_with_48h_rule("Cấy nước tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         if not cay_nuoc_tieu.empty and 'charttime' in cay_nuoc_tieu.columns and 'org_name' in cay_nuoc_tieu.columns:
             # Lọc bỏ các dòng NaN
             df_cay_valid = cay_nuoc_tieu[cay_nuoc_tieu['org_name'].notna()].sort_values('charttime')
@@ -721,7 +781,7 @@ class InfectionChecker:
 
         # Bạch cầu niệu
         bachcaunieu = False
-        bach_cau_nieu = self._get_cached_data("Bạch cầu niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        bach_cau_nieu = self.get_data_with_48h_rule("Bạch cầu niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         if not bach_cau_nieu.empty and 'valuenum' in bach_cau_nieu.columns:
             df_bcn = bach_cau_nieu[bach_cau_nieu['valuenum'] > 5]
             if not df_bcn.empty:
@@ -730,7 +790,7 @@ class InfectionChecker:
         
         # Mủ niệu
         munieu = False
-        mu_nieu = self._get_cached_data("Mủ niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        mu_nieu = self.get_data_with_48h_rule("Mủ niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         if not mu_nieu.empty and 'valuenum' in mu_nieu.columns:
             df_mn = mu_nieu[mu_nieu['valuenum'] > 5]
             if not df_mn.empty:
@@ -739,7 +799,7 @@ class InfectionChecker:
 
         # Nitrat niệu (Tối ưu bằng xử lý chuỗi .str)
         nitratnieu = False
-        nitrat_nieu = self._get_cached_data("Nitrat niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
+        nitrat_nieu = self.get_data_with_48h_rule("Nitrat niệu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         if not nitrat_nieu.empty and 'value' in nitrat_nieu.columns:
             positive_values = ['POS', 'POSITIVE', 'P']
             # Chuyển thành text -> Cắt khoảng trắng -> In hoa -> Kiểm tra xem có nằm trong list dương tính không
@@ -755,7 +815,7 @@ class InfectionChecker:
         # 3. ĐIỀU KIỆN ỐNG THÔNG TIỂU
         # ---------------------------------------------------------
         thoi_gian_dat_ong_thong_tieu = False
-        ong_thong_tieu = self._get_cached_data("Thời gian đặt ống thông tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time, check_48h=False)
+        ong_thong_tieu = self._fetch_and_cache_raw_data("Thời gian đặt ống thông tiểu", subject_id=subject_id, in_time=in_time, out_time=out_time)
         
         if first_time2 != FAR_FUTURE and not ong_thong_tieu.empty and 'starttime' in ong_thong_tieu.columns:
             # Tạo mặt nạ kiểm tra: Thời gian đầu tiên xuất hiện triệu chứng - thời gian bắt đầu đặt >= 2 ngày

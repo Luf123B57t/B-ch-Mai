@@ -136,7 +136,7 @@ class ClinicalDataExtractor:
                 
         return df
 
-    def get_variable_data(self, variable_name: str, time_process_func = None, in_time = None, out_time = None, subject_id: Optional[int] = None, stay_id: Optional[int] = None, check_48h: bool = True) -> pd.DataFrame:
+    def get_variable_data(self, variable_name: str, time_process_func = None, in_time = None, out_time = None, subject_id: Optional[int] = None, stay_id: Optional[int] = None) -> pd.DataFrame:
         """
         Trích xuất dữ liệu cho một biến cụ thể.
         """
@@ -175,9 +175,9 @@ class ClinicalDataExtractor:
                         # Sử dụng .between để lọc trong khoảng [in_time, outtime]
                         df = df[df[time_col].between(in_time, out_time)]
                     
-                    if check_48h and in_time is not None: 
-                        min_time_allowed = in_time + pd.Timedelta(hours=48)
-                        df = df[df[time_col] >= min_time_allowed]
+                    # if check_48h and in_time is not None: 
+                    #     min_time_allowed = in_time + pd.Timedelta(hours=48)
+                    #     df = df[df[time_col] >= min_time_allowed]
                     
 
             # Copy để gán meta-data mà không ảnh hưởng DataFrame gốc
