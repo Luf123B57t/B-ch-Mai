@@ -123,7 +123,7 @@ class InfectionChecker:
     def __init__(self,extractor: ClinicalDataExtractor, verbose: bool = True):
         self.extractor = extractor
         self.verbose = verbose
-        MODEL_DIR = "/home/user04/Yte_BachMai/model_bert/clinicalbert_best"
+        MODEL_DIR = "/home/user01/yte_BachMai/clinicalbert_best"
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
