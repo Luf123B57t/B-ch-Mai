@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from features_mapping import ClinicalDataExtractor
 import torch
 import re
 from datasets import Dataset
@@ -123,7 +122,7 @@ class InfectionChecker:
     def __init__(self,extractor: ClinicalDataExtractor, verbose: bool = True):
         self.extractor = extractor
         self.verbose = verbose
-        MODEL_DIR = "/home/user01/yte_BachMai/clinicalbert_best"
+        MODEL_DIR = "/kaggle/input/models/anhducleee/clinical-bert/transformers/default/1/clinicalbert_best"
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
@@ -179,8 +178,7 @@ class InfectionChecker:
         if cache_key not in self._data_cache:
             kwargs = {
                 'variable_name': variable_name,
-                'subject_id': subject_id,
-                'time_process_func': process_time_without_year 
+                'subject_id': subject_id
             }
             if stay_id is not None: kwargs['stay_id'] = stay_id
             if in_time is not None: kwargs['in_time'] = in_time
@@ -194,39 +192,39 @@ class InfectionChecker:
 
 
     def get_data_with_48h_rule(self, variable_name, subject_id, stay_id=None, in_time=None, out_time=None):
-        """
-        HÀM 2: Lấy data trực tiếp từ Cache (không fetch mới) và lọc bỏ các sự kiện < 48h.
-        Phục vụ trực tiếp cho quá trình Label (VAP, CLABSI...).
-        """
         cache_key = (variable_name, subject_id, stay_id, in_time, out_time)
-        
+
         if cache_key not in self._data_cache:
             self._fetch_and_cache_raw_data(
-                variable_name=variable_name, 
-                subject_id=subject_id, 
-                stay_id=stay_id, 
-                in_time=in_time, 
+                variable_name=variable_name,
+                subject_id=subject_id,
+                stay_id=stay_id,
+                in_time=in_time,
                 out_time=out_time
             )
-            
+
         df = self._data_cache[cache_key]
 
         if df is None or df.empty:
             return df
-            
-        # 3. Linh hoạt tên cột thời gian (chartevent hoặc charttime)
-        time_col = 'charttime'
-        
-        if time_col not in df.columns:
-            raise KeyError(f"Dữ liệu của {variable_name} không có cột '{time_col}' để tính khoảng cách 48h.")
-            
-        # df[time_col] = pd.to_datetime(df[time_col])
-        
-        # Lọc trực tiếp: khoảng cách từ in_time đến charttime >= 48 giờ
-        df_filtered = df[(df[time_col] - in_time).dt.total_seconds() / 3600.0 >= 48.0].copy()
-        
-                
-        return df_filtered
+
+        time_col = None
+
+        if "mapped_time_column" in df.columns and df["mapped_time_column"].notna().any():
+            time_col = df["mapped_time_column"].dropna().iloc[0]
+
+        if time_col is None or time_col not in df.columns:
+            for c in ["charttime", "starttime", "chartdate"]:
+                if c in df.columns:
+                    time_col = c
+                    break
+
+        if time_col is None or time_col not in df.columns:
+            raise KeyError(f"Dữ liệu của {variable_name} không có cột thời gian để tính 48h.")
+
+        return df[
+            ((df[time_col] - in_time).dt.total_seconds() / 3600.0) >= 48.0
+        ].copy()
 
     def _check_spo2_worsening(self, subject_id, stay_id, in_time:pd.Timestamp):
         """
@@ -251,7 +249,6 @@ class InfectionChecker:
         if spo2.empty:
             return False, None, pd.DataFrame()
 
-        spo2["charttime"] = process_time_without_year(spo2["charttime"])
         spo2 = spo2[spo2["valuenum"].notna()].copy()
         spo2 = spo2.sort_values("charttime").reset_index(drop=True)
 
@@ -608,29 +605,43 @@ class InfectionChecker:
     # HÀM TỔNG HỢP
     # =========================================================
     def check_vap_subject(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
-        """
-        Trả về dict tổng hợp cả 3 rule
-        """
-        r1 = self.check_vap_rule1(subject_id, stay_id, in_time = in_time, out_time = out_time)
-        r2 = self.check_vap_rule2(subject_id, stay_id, in_time = in_time, out_time = out_time)
-        r3 = self.check_vap_rule3(subject_id, stay_id, in_time = in_time, out_time = out_time)
+        symptom_flags, symptom_count, first_time, spo2_debug = self._get_vap_symptoms(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time
+        )
+    
+        micro_positive = self._get_vap_micro_positive(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time
+        )
+    
+        imaging_positive = self._get_vap_imaging_positive(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time,
+            out_time=out_time
+        )
+    
+        ventilation_ok = self._check_ventilation_before_first_time(
+            subject_id=subject_id,
+            stay_id=stay_id,
+            in_time=in_time,
+            first_time=first_time
+        )
 
-        final_vap = r1 or r2 or r3
-
-        if self.verbose:
-            print("\n===== FINAL VAP =====")
-            print("rule1:", r1)
-            print("rule2:", r2)
-            print("rule3:", r3)
-            print("=> FINAL VAP:", final_vap)
-
+        r1 = symptom_count >= 2 and imaging_positive and micro_positive and ventilation_ok
+        r2 = symptom_count >= 3 and ventilation_ok
+        r3 = symptom_count >= 2 and imaging_positive and ventilation_ok
+    
         return {
             "rule1": r1,
             "rule2": r2,
             "rule3": r3,
-            "final_vap": final_vap
+            "final_vap": r1 or r2 or r3
         }
-        
+            
 
     def check_clabsi_subject(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
         FAR_FUTURE = pd.Timestamp('2001-01-01')
@@ -1398,4 +1409,3 @@ class InfectionChecker:
             criteria_order=criteria_order,
         )
         return cauti_json
-    

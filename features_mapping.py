@@ -40,10 +40,6 @@ class ClinicalDataExtractor:
     Class chuyên dụng để trích xuất dữ liệu lâm sàng dựa trên các luật mapping.
     """
     def __init__(self, data_tables: Dict[str, pd.DataFrame]):
-        """
-        Khởi tạo extractor với các bảng dữ liệu thực tế.
-        :param data_tables: Dictionary chứa các Pandas DataFrames (VD: {"chartevents": df1, "labevents": df2})
-        """
         self.tables = data_tables
         
         # Các từ khóa cố định
@@ -164,65 +160,100 @@ class ClinicalDataExtractor:
                 df = df[df[col2] == val2]
                 
         return df
+    def _get_base_df(self, source_table: str, subject_id=None, stay_id=None) -> pd.DataFrame:
+        df = self.tables.get(source_table, pd.DataFrame())
+    
+        if df.empty:
+            return df
+    
+        if subject_id is not None and "subject_id" in df.columns:
+            df = df[df["subject_id"] == subject_id]
+    
+        if stay_id is not None and "stay_id" in df.columns:
+            df = df[df["stay_id"] == stay_id]
+    
+        return df
 
-    def get_variable_data(self, variable_name: str, time_process_func = None, in_time = None, out_time = None, subject_id: Optional[int] = None, stay_id: Optional[int] = None) -> pd.DataFrame:
+    def get_variable_data(
+        self,
+        variable_name: str,
+        time_process_func=None,
+        in_time=None,
+        out_time=None,
+        subject_id: Optional[int] = None,
+        stay_id: Optional[int] = None,
+    ) -> pd.DataFrame:
         """
         Trích xuất dữ liệu cho một biến cụ thể.
+        Bản tối ưu: lấy bảng nhỏ từ indexed_tables trước, rồi mới apply lookup.
         """
-        # Lấy các luật áp dụng cho biến này
-        target_mappings = self.mapping_rules[self.mapping_rules["variable_name"] == variable_name]
-        results = []
 
+        target_mappings = self.mapping_rules[
+            self.mapping_rules["variable_name"] == variable_name
+        ]
+    
+        results = []
+    
         for _, row in target_mappings.iterrows():
             source_table = row["source_table"]
+    
             if source_table not in self.tables:
-                continue # Bỏ qua nếu bảng không được cung cấp
+                continue
+    
+            df = self._get_base_df(
+                source_table=source_table,
+                subject_id=subject_id,
+                stay_id=stay_id if pd.notna(row["stay_id_column"]) else None,
+            )
+    
+            if df is None or df.empty:
+                continue
 
-            # Lấy data và filter theo các ID
-            df = self.tables[source_table]
-            
-            # Lọc theo ID (dùng pd.notna để tránh lỗi với giá trị None trong Pandas)
-            if subject_id is not None and pd.notna(row["subject_id_column"]) and row["subject_id_column"] in df.columns:
-                df = df[df[row["subject_id_column"]] == subject_id]
-
-            if stay_id is not None and pd.notna(row["stay_id_column"]) and row["stay_id_column"] in df.columns:
-                df = df[df[row["stay_id_column"]] == stay_id]
-
-            # Áp dụng logic lookup nghiệp vụ
-            df = self._apply_lookup_logic(df, row)
-
+            # fallback an toàn nếu index không có hoặc bảng chưa được group đúng
+            if subject_id is not None and pd.notna(row["subject_id_column"]):
+                sid_col = row["subject_id_column"]
+                if sid_col in df.columns:
+                    df = df[df[sid_col] == subject_id]
+    
+            if stay_id is not None and pd.notna(row["stay_id_column"]):
+                st_col = row["stay_id_column"]
+                if st_col in df.columns:
+                    df = df[df[st_col] == stay_id]
+    
             if df.empty:
                 continue
-            
-            if time_process_func is not None:
-                time_col = row["time_column"]
-                if pd.notna(time_col) and time_col in df.columns:
-                    # Đảm bảo cột thời gian trong df là datetime
-                    df[time_col] = time_process_func(df[time_col])
+    
+            # Apply itemid / spec_type_desc / keyword_search
+            df = self._apply_lookup_logic(df, row)
+    
+            if df.empty:
+                continue
 
-                    if stay_id is None and in_time is not None and out_time is not None:
-                        # Sử dụng .between để lọc trong khoảng [in_time, outtime]
-                        df = df[df[time_col].between(in_time, out_time)]
-                    
-                    # if check_48h and in_time is not None: 
-                    #     min_time_allowed = in_time + pd.Timedelta(hours=48)
-                    #     df = df[df[time_col] >= min_time_allowed]
-                    
-
-            # Copy để gán meta-data mà không ảnh hưởng DataFrame gốc
+            # Không convert time lại nữa nếu bạn đã convert ở main.
+            # Chỉ filter theo khoảng ICU.
+            time_col = row["time_column"]
+            if pd.notna(time_col) and time_col in df.columns:
+                if in_time is not None:
+                    df = df[df[time_col] >= in_time]
+    
+                if out_time is not None:
+                    df = df[df[time_col] <= out_time]
+    
+            if df.empty:
+                continue
+    
             df_mapped = df.copy()
             df_mapped["mapped_variable_name"] = row["variable_name"]
             df_mapped["mapped_source_table"] = row["source_table"]
             df_mapped["mapped_value_column"] = row["value_column"]
             df_mapped["mapped_time_column"] = row["time_column"]
             df_mapped["mapped_endtime_column"] = row["endtime_column"]
-
+    
             results.append(df_mapped)
 
         if not results:
             return pd.DataFrame()
-
-        # Gộp kết quả
+    
         final_result = pd.concat(results, ignore_index=True, sort=False)
         return final_result.drop_duplicates().reset_index(drop=True)
-    
+          
