@@ -160,15 +160,29 @@ class ClinicalDataExtractor:
                 df = df[df[col2] == val2]
                 
         return df
+    
     def _get_base_df(self, source_table: str, subject_id=None, stay_id=None) -> pd.DataFrame:
-        df = self.tables.get(source_table, pd.DataFrame())
+        # Lấy ra dict chứa các patient dataframe của bảng này
+        table_data = self.tables.get(source_table, {})
+        
+        # Nếu cấu trúc truyền vào là Dict (Grouped Data)
+        if isinstance(table_data, dict):
+            if subject_id is not None:
+                df = table_data.get(subject_id, pd.DataFrame())
+            else:
+                df = pd.DataFrame()
+        # Nếu cấu trúc truyền vào vẫn là DataFrame gốc
+        elif isinstance(table_data, pd.DataFrame):
+            df = table_data
+            if subject_id is not None and "subject_id" in df.columns:
+                df = df[df["subject_id"] == subject_id]
+        else:
+            df = pd.DataFrame()
     
         if df.empty:
             return df
     
-        if subject_id is not None and "subject_id" in df.columns:
-            df = df[df["subject_id"] == subject_id]
-    
+        # Xử lý tiếp filter stay_id nếu có
         if stay_id is not None and "stay_id" in df.columns:
             df = df[df["stay_id"] == stay_id]
     
