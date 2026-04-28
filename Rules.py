@@ -208,9 +208,7 @@ class InfectionChecker:
 
         if df is None or df.empty:
             return df
-        
-        vent_start_time = pd.to_datetime(vent_start_time)
-        
+            
         # 3. Linh hoạt tên cột thời gian (chartevent hoặc charttime)
         time_col = 'charttime'
         
