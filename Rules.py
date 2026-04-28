@@ -193,7 +193,7 @@ class InfectionChecker:
         return self._data_cache[cache_key].copy()
 
 
-    def get_data_with_48h_rule(self, variable_name, subject_id, vent_start_time, stay_id=None, in_time=None, out_time=None):
+    def get_data_with_48h_rule(self, variable_name, subject_id, stay_id=None, in_time=None, out_time=None):
         """
         HÀM 2: Lấy data trực tiếp từ Cache (không fetch mới) và lọc bỏ các sự kiện < 48h.
         Phục vụ trực tiếp cho quá trình Label (VAP, CLABSI...).
