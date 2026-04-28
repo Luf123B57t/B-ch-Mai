@@ -201,8 +201,13 @@ class InfectionChecker:
         cache_key = (variable_name, subject_id, stay_id, in_time, out_time)
         
         if cache_key not in self._data_cache:
-            # Tùy bạn quyết định: raise Exception hoặc return None nếu quên chưa tạo cache
-            raise KeyError(f"Dữ liệu cho {variable_name} chưa có trong cache. Phải gọi hàm tạo cache trước!")
+            self._fetch_and_cache_raw_data(
+                variable_name=variable_name, 
+                subject_id=subject_id, 
+                stay_id=stay_id, 
+                in_time=in_time, 
+                out_time=out_time
+            )
             
         df = self._data_cache[cache_key]
 
