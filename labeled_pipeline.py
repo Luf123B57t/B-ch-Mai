@@ -7,7 +7,7 @@ import glob
 import json
 import gc
 
-parquet_dir = "/kaggle/input/datasets/anhducleee/mimic-dataset/parquet"
+parquet_dir = r'/home/user01/yte_BachMai/parquet'
 
 print("Read .parquet files...")
 
@@ -120,15 +120,15 @@ checker = InfectionChecker(extractor=extractor, verbose=False)
 print("Processing...")
 
 BATCH_SIZE = 30000
-BATCH_DIR = "/kaggle/working/infection_batches"
+BATCH_DIR = "/home/user01/yte_BachMai/infection_batches"
 os.makedirs(BATCH_DIR, exist_ok=True)
 
-final_csv_path = "/kaggle/working/infection_check_detailed_results.csv"
+final_csv_path = "infection_check_detailed_results.csv"
 
 final_json_paths = {
-    "VAP": "/kaggle/working/dataset_vap.jsonl",
-    "CLABSI": "/kaggle/working/dataset_clabsi.jsonl",
-    "CAUTI": "/kaggle/working/dataset_cauti.jsonl",
+    "VAP": r'/home/user01/yte_BachMai/dataset_vap.jsonl',
+    "CLABSI": r'/home/user01/yte_BachMai/dataset_clabsi.jsonl',
+    "CAUTI": r'/home/user01/yte_BachMai/dataset_cauti.jsonl',
 }
 
 def batch_done_path(start, end):
