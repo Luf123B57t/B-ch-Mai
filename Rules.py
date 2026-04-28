@@ -1,18 +1,35 @@
 import pandas as pd
 import numpy as np
-# import torch
+import torch
 import re
 from datasets import Dataset
-# from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from features_mapping import ClinicalDataExtractor
 
 def process_time_without_year(date_series):
     """
-    Data đã được vectorized chuyển năm về 2000 ở bước load file Parquet.
-    Hàm này giờ chỉ đóng vai trò ép kiểu chuẩn pd.Timestamp.
+    Converts an object/string series or a single scalar to datetime and neutralizes the year.
+    This allows you to calculate time differences (months, days, hours, mins) 
+    while completely ignoring the original year.
+    
+    Parameters:
+    date_series (pd.Series, list, or single value): The input date(s) as strings/objects.
+    
+    Returns:
+    pd.Series or pd.Timestamp: Datetime object(s) with the year standardized to 2000.
     """
+    # 1. Convert the object to a proper datetime type
     dt_series = pd.to_datetime(date_series, errors='coerce')
-    return dt_series
+    
+    # 2. Xử lý trường hợp đầu vào là một chuỗi/cột (pd.Series)
+    if isinstance(dt_series, pd.Series):
+        return dt_series.apply(lambda x: x.replace(year=2000) if pd.notnull(x) else x)
+    
+    # 3. Xử lý trường hợp đầu vào là một giá trị đơn (pd.Timestamp)
+    else:
+        if pd.notnull(dt_series):
+            return dt_series.replace(year=2000)
+        return dt_series  # Trả về NaT nếu giá trị truyền vào là null/rỗng
     
 def get_row_time(row):
     time_col = row.get("mapped_time_column", None)
@@ -103,17 +120,16 @@ def build_infection_json(df_detail, criteria_order):
 class InfectionChecker:
     """Class quản lý việc kiểm tra các loại nhiễm trùng (HAIs) của bệnh nhân."""
     
-    def __init__(self,extractor: ClinicalDataExtractor, verbose: bool = True, prediction_map: dict = None):
+    def __init__(self,extractor: ClinicalDataExtractor, verbose: bool = True):
         self.extractor = extractor
         self.verbose = verbose
-        # MODEL_DIR = r"/home/user01/yte_BachMai/clinicalbert_best"
+        MODEL_DIR = r"/home/user01/yte_BachMai/clinicalbert_best"
         
-        # self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # self.tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-        # self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR).to(self.device)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+        self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR).to(self.device)
 
         self._data_cache = {}
-        self.prediction_map = prediction_map if prediction_map is not None else {}
 
 
     def clear_cache(self):
@@ -356,11 +372,17 @@ class InfectionChecker:
 
         return symptom_flags, symptom_count, first_time, spo2_debug
 
-    def _get_vap_imaging_positive(self, subject_id: int, stay_id: int, in_time: pd.Timestamp, out_time: pd.Timestamp):
+    def _get_vap_imaging_positive(self, subject_id: int,
+    stay_id: int,
+    in_time: pd.Timestamp,
+    out_time: pd.Timestamp
+):
         """
-        Kiểm tra imaging gợi ý viêm phổi bằng cách tra cứu kết quả từ Dictionary (lookup).
+        Kiểm tra imaging gợi ý viêm phổi từ:
+        - X-quang ngực
+        - CT scan lồng ngực
         """
-        # Ưu tiên kiểm tra vi sinh trước như logic cũ
+
         micro_positive = self._get_vap_micro_positive(
             subject_id=subject_id,
             stay_id=stay_id,
@@ -369,24 +391,60 @@ class InfectionChecker:
         if micro_positive:
             return True
 
-        # Lấy dữ liệu X-quang (đã áp dụng luật 48h)
-        xray = self.get_data_with_48h_rule("X-quang ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time, out_time=out_time)
+        imaging_positive = False
 
-        if xray.empty or "text" not in xray.columns:
+        xray = self.get_data_with_48h_rule("X-quang ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+        # ct = self.get_data_with_48h_rule("CT scan lồng ngực", subject_id=subject_id, stay_id=stay_id, in_time=in_time)
+
+        THRESHOLD = 0.35
+        MAX_LENGTH = 256
+
+        text_list = []
+
+        for df_img in [xray]:
+            if df_img.empty:
+                continue
+            if "text" not in df_img.columns:
+                continue
+
+            for sample in df_img.itertuples(index=True, name="Pandas"):
+                text = str(sample.text).strip().lower()
+                if text and text != "nan":
+                    text_list.append(text)
+
+        if len(text_list) == 0:
             return False
 
-        # Duyệt qua từng bản ghi văn bản X-quang để tra cứu kết quả dự đoán
-        for sample in xray.itertuples(index=False):
-            text = str(sample.text).strip()
-            if not text or text.lower() == "nan":
-                continue
-            
-            # Tra cứu trong map kết quả (Pre-computed mapping)
-            # Nếu text tồn tại trong map và có kết quả là True -> Dương tính imaging
-            if self.prediction_map.get(text) == True:
-                return True
+        self.model.eval()
 
-        return False
+        def predict_batch(texts, batch_size=8):
+            probs_all = []
+
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                inputs = self.tokenizer(
+                    batch_texts,
+                    truncation=True,
+                    padding=True,
+                    max_length=MAX_LENGTH,
+                    return_tensors="pt"
+                ).to(self.device)
+
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    probs = torch.softmax(outputs.logits, dim=1)[:, 1].cpu().numpy()
+
+                probs_all.extend(probs)
+
+            return np.array(probs_all)
+
+        probs = predict_batch(text_list)
+        preds = (probs >= THRESHOLD).astype(int)
+
+        if len(preds) > 0 and preds.max() == 1:
+            imaging_positive = True
+
+        return imaging_positive
 
 
     def _get_vap_micro_positive(self, subject_id: int, stay_id: int, in_time):
