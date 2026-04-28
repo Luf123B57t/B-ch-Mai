@@ -4,6 +4,7 @@ import torch
 import re
 from datasets import Dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from features_mapping import ClinicalDataExtractor
 
 def process_time_without_year(date_series):
     """
@@ -122,7 +123,7 @@ class InfectionChecker:
     def __init__(self,extractor: ClinicalDataExtractor, verbose: bool = True):
         self.extractor = extractor
         self.verbose = verbose
-        MODEL_DIR = "/kaggle/input/models/anhducleee/clinical-bert/transformers/default/1/clinicalbert_best"
+        MODEL_DIR = r"/home/user01/yte_BachMai/clinicalbert_best"
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
