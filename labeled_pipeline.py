@@ -202,15 +202,30 @@ for batch_start in range(0, len(icu_stay), BATCH_SIZE):
             cauti_check = {"final_cauti": False}
 
             try:
-                vap_record = checker.get_vap_features(...)
+                vap_record = checker.get_vap_features(
+                    subject_id=subject_id,
+                    stay_id=stay_id,
+                    in_time=intime,
+                    out_time=outtime
+                )
                 vap_buffer.append(json.dumps(vap_record, ensure_ascii=False))
                 wrote_vap = True
 
-                clabsi_record = checker.get_clabsi_features(...)
+                clabsi_record = checker.get_clabsi_features(
+                    subject_id=subject_id,
+                    stay_id=stay_id,
+                    in_time=intime,
+                    out_time=outtime
+                )
                 clabsi_buffer.append(json.dumps(clabsi_record, ensure_ascii=False))
                 wrote_clabsi = True
 
-                cauti_record = checker.get_cauti_features(...)
+                cauti_record = checker.get_cauti_features(
+                    subject_id=subject_id,
+                    stay_id=stay_id,
+                    in_time=intime,
+                    out_time=outtime
+                )
                 cauti_buffer.append(json.dumps(cauti_record, ensure_ascii=False))
                 wrote_cauti = True
 
@@ -239,11 +254,11 @@ for batch_start in range(0, len(icu_stay), BATCH_SIZE):
                 print(f"Lỗi subject_id={subject_id}, stay_id={stay_id}: {e}")
 
                 if not wrote_vap:
-                    safe_jsonl_write(f_vap, [])
+                    vap_buffer.append("[]")
                 if not wrote_clabsi:
-                    safe_jsonl_write(f_clabsi, [])
+                    clabsi_buffer.append("[]")
                 if not wrote_cauti:
-                    safe_jsonl_write(f_cauti, [])
+                    cauti_buffer.append("[]")
             
             if len(vap_buffer) >= FLUSH_LIMIT:
                 f_vap.write("\n".join(vap_buffer) + "\n")
@@ -345,6 +360,7 @@ for kind, final_json_path in final_json_paths.items():
     print(f"Saved final JSONL {kind}: {final_json_path}")
 
 print("\n--- KẾT QUẢ THỐNG KÊ FINAL ---")
+df_all = pd.read_csv(final_csv_path)
 for col, name in [
     ("final_vap", "VAP"),
     ("final_clabsi", "CLABSI"),
