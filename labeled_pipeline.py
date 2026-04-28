@@ -9,10 +9,10 @@ parquet_dir = r'/home/user01/yte_BachMai/parquet'
 
 print("Read .parquet files...")
 cols_chart = ['subject_id', 'stay_id', 'charttime', 'itemid', 'value', 'valuenum']
-chartevent = pd.read_parquet(f'{parquet_dir}/chartevents_full.parquet', columns=cols_chart)
+chartevent = pd.read_parquet(f'{parquet_dir}/chartevents.parquet', columns=cols_chart)
 
 cols_lab = ['subject_id', 'itemid', 'charttime', 'value', 'valuenum', 'comments']
-labevent = pd.read_parquet(f'{parquet_dir}/labevents_full.parquet', columns=cols_lab)
+labevent = pd.read_parquet(f'{parquet_dir}/labevents.parquet', columns=cols_lab)
 
 discharge = pd.read_parquet(f'{parquet_dir}/discharge.parquet')
 microbiologyevent = pd.read_parquet(f'{parquet_dir}/microbiologyevents.parquet')
