@@ -398,7 +398,7 @@ class InfectionChecker:
 
         text_list = []
 
-        for df_img in [xray, ct]:
+        for df_img in [xray]:
             if df_img.empty:
                 continue
             if "text" not in df_img.columns:
@@ -1047,7 +1047,7 @@ class InfectionChecker:
                 out_time=out_time,
             )
         except TypeError:
-            imaging_positive = self._get_vap_imaging_positive(
+            imaging_positive = self._fetch_and_cache_raw_data(
                 subject_id=subject_id,
                 stay_id=stay_id,
                 in_time=in_time,
