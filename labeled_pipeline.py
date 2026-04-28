@@ -7,7 +7,7 @@ import json
 # NROWS = 15000000
 parquet_dir = r'/home/user01/yte_BachMai/parquet'
 
-print("Read .parquet files...")
+print("Đọc .parquet files...")
 cols_chart = ['subject_id', 'stay_id', 'charttime', 'itemid', 'value', 'valuenum']
 chartevent = pd.read_parquet(f'{parquet_dir}/chartevents.parquet', columns=cols_chart)
 

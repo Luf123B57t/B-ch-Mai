@@ -991,10 +991,7 @@ class InfectionChecker:
         try:
             tho_may = self._fetch_and_cache_raw_data(
                 variable_name="Thời gian thở máy",
-                subject_id=subject_id,
-                stay_id=stay_id,
-                in_time=in_time,
-                time_process_func=process_time_without_year,
+                subject_id=subject_id, stay_id=stay_id, in_time=in_time, out_time=out_time
             )
         except Exception as e:
             print(f"Lỗi Thời gian thở máy | subject_id={subject_id}, stay_id={stay_id}: {e}")
@@ -1045,14 +1042,14 @@ class InfectionChecker:
         # 4.3 VAP imaging
         # =====================================================
         try:
-            imaging_positive = checker._get_vap_imaging_positive(
+            imaging_positive = self._get_vap_imaging_positive(
                 subject_id=subject_id,
                 stay_id=stay_id,
                 in_time=in_time,
                 out_time=out_time,
             )
         except TypeError:
-            imaging_positive = checker._get_vap_imaging_positive(
+            imaging_positive = self._get_vap_imaging_positive(
                 subject_id=subject_id,
                 stay_id=stay_id,
                 in_time=in_time,
