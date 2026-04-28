@@ -1053,6 +1053,7 @@ class InfectionChecker:
                 subject_id=subject_id,
                 stay_id=stay_id,
                 in_time=in_time,
+                out_time=out_time
             )
         except Exception as e:
             print(f"Lỗi Imaging VAP | subject_id={subject_id}, stay_id={stay_id}: {e}")
